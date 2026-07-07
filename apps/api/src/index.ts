@@ -202,10 +202,26 @@ app.get("/players/:playerId/state", async (request, reply) => {
     [playerId]
   );
 
+    const worldStateResult = await db.query(
+    `
+    SELECT
+      flag_key,
+      flag_value,
+      description,
+      source_event_id,
+      updated_at
+    FROM world_state_flags
+    WHERE player_id = $1
+    ORDER BY updated_at DESC
+    `,
+    [playerId]
+  );
+
   return reply.status(200).send({
     player: playerResult.rows[0],
     reputation: reputationResult.rows,
-    recentTimeline: timelineResult.rows
+    recentTimeline: timelineResult.rows,
+    worldState: worldStateResult.rows
   });
 });
 
@@ -310,6 +326,53 @@ app.get("/npcs/:npcId/behavior", async (request, reply) => {
     behavior,
     reason,
     memories
+  });
+});
+
+
+app.get("/players/:playerId/world-state", async (request, reply) => {
+  const { playerId } = request.params as { playerId: string };
+
+  const result = await db.query(
+    `
+    SELECT
+      player_id,
+      flag_key,
+      flag_value,
+      description,
+      source_event_id,
+      updated_at
+    FROM world_state_flags
+    WHERE player_id = $1
+    ORDER BY updated_at DESC
+    `,
+    [playerId]
+  );
+
+  return reply.status(200).send({
+    playerId,
+    worldState: result.rows
+  });
+});
+
+app.get("/world/state", async (_request, reply) => {
+  const result = await db.query(
+    `
+    SELECT
+      player_id,
+      flag_key,
+      flag_value,
+      description,
+      source_event_id,
+      updated_at
+    FROM world_state_flags
+    ORDER BY updated_at DESC
+    LIMIT 100
+    `
+  );
+
+  return reply.status(200).send({
+    worldState: result.rows
   });
 });
 

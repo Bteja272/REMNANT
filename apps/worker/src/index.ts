@@ -32,6 +32,14 @@ type NpcMemory = {
   relatedEventId: string;
 };
 
+type WorldStateFlag = {
+  playerId: string;
+  flagKey: string;
+  flagValue: boolean;
+  description: string;
+  sourceEventId: string;
+};
+
 function normalizeFactionId(factionName?: string): string | null {
   if (!factionName) return null;
 
@@ -126,6 +134,64 @@ function buildNpcMemory(event: PlayerActionCreatedEvent): NpcMemory | null {
     default:
       return null;
   }
+}
+
+function buildWorldStateFlags(event: PlayerActionCreatedEvent): WorldStateFlag[] {
+  const targetFactionId = normalizeFactionId(event.targetFaction);
+  const npcId = event.npcId?.toLowerCase();
+  const resource = event.metadata?.resource?.toLowerCase();
+
+  const flags: WorldStateFlag[] = [];
+
+  if (
+    event.actionType === "DONATE_RESOURCE" &&
+    targetFactionId === "survivors" &&
+    resource === "medicine"
+  ) {
+    flags.push({
+      playerId: event.playerId,
+      flagKey: "survivors_clinic_supplied",
+      flagValue: true,
+      description:
+        "Dusthaven Clinic has enough medicine because the player donated supplies to the Survivors.",
+      sourceEventId: event.eventId
+    });
+  }
+
+  if (event.actionType === "ROB_NPC" && npcId === "mara") {
+    flags.push({
+      playerId: event.playerId,
+      flagKey: "trader_market_unstable",
+      flagValue: true,
+      description:
+        "Mara's trade post is unstable after the player robbed her.",
+      sourceEventId: event.eventId
+    });
+  }
+
+  if (event.actionType === "SPARE_ENEMY" && npcId === "knox") {
+    flags.push({
+      playerId: event.playerId,
+      flagKey: "raider_checkpoint_ambush_disabled",
+      flagValue: true,
+      description:
+        "Knox remembers being spared, reducing the chance of a Raider checkpoint ambush.",
+      sourceEventId: event.eventId
+    });
+  }
+
+  if (event.actionType === "ATTACK_FACTION" && targetFactionId === "raiders") {
+    flags.push({
+      playerId: event.playerId,
+      flagKey: "raider_checkpoint_hostile",
+      flagValue: true,
+      description:
+        "The Raider checkpoint has become hostile after the player attacked Raiders.",
+      sourceEventId: event.eventId
+    });
+  }
+
+  return flags;
 }
 
 async function saveChoiceEvent(event: PlayerActionCreatedEvent): Promise<void> {
@@ -280,10 +346,55 @@ async function saveNpcMemory(event: PlayerActionCreatedEvent): Promise<void> {
   );
 }
 
+async function saveWorldStateFlags(
+  event: PlayerActionCreatedEvent
+): Promise<void> {
+  const flags = buildWorldStateFlags(event);
+
+  if (flags.length === 0) {
+    console.log("[worker] No world state flags generated for this event.");
+    return;
+  }
+
+  for (const flag of flags) {
+    await db.query(
+      `
+      INSERT INTO world_state_flags (
+        player_id,
+        flag_key,
+        flag_value,
+        description,
+        source_event_id,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, NOW())
+      ON CONFLICT (player_id, flag_key)
+      DO UPDATE SET
+        flag_value = EXCLUDED.flag_value,
+        description = EXCLUDED.description,
+        source_event_id = EXCLUDED.source_event_id,
+        updated_at = NOW()
+      `,
+      [
+        flag.playerId,
+        flag.flagKey,
+        flag.flagValue,
+        flag.description,
+        flag.sourceEventId
+      ]
+    );
+
+    console.log(
+      `[worker] World state flag updated: player=${flag.playerId}, flag=${flag.flagKey}, value=${flag.flagValue}`
+    );
+  }
+}
+
 async function processPlayerAction(event: PlayerActionCreatedEvent): Promise<void> {
   await saveChoiceEvent(event);
   await applyReputationUpdates(event);
   await saveNpcMemory(event);
+  await saveWorldStateFlags(event);
 }
 
 async function startWorker() {
@@ -360,7 +471,7 @@ async function startWorker() {
       try {
         await processPlayerAction(event);
         console.log(
-          "[worker] Event persisted, cascading consequences applied, and NPC memory updated\n"
+          "[worker] Event persisted, consequences applied, NPC memory updated, and world state flags updated\n"
         );
       } catch (error) {
         console.error("[worker] Failed to process event", {

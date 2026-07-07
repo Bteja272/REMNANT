@@ -56,11 +56,31 @@ CREATE TABLE IF NOT EXISTS npc_memory (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+
 CREATE INDEX IF NOT EXISTS idx_npc_memory_player_npc
 ON npc_memory (player_id, npc_id);
 
 CREATE INDEX IF NOT EXISTS idx_npc_memory_created_at
 ON npc_memory (created_at DESC);
+
+
+CREATE TABLE IF NOT EXISTS world_state_flags (
+    id BIGSERIAL PRIMARY KEY,
+    player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    flag_key TEXT NOT NULL,
+    flag_value BOOLEAN NOT NULL DEFAULT TRUE,
+    description TEXT NOT NULL,
+    source_event_id TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (player_id, flag_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_world_state_flags_player
+ON world_state_flags (player_id);
+
+CREATE INDEX IF NOT EXISTS idx_world_state_flags_updated_at
+ON world_state_flags (updated_at DESC);
+
 
 CREATE TABLE IF NOT EXISTS choice_events (
     event_id TEXT NOT NULL,
