@@ -1,7 +1,7 @@
 :root {
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
   background: #101014;
   color: #f4f4f5;
 }
@@ -13,7 +13,11 @@
 body {
   margin: 0;
   background:
-    radial-gradient(circle at top left, rgba(111, 87, 255, 0.2), transparent 32rem),
+    radial-gradient(
+      circle at top left,
+      rgba(111, 87, 255, 0.2),
+      transparent 32rem
+    ),
     #101014;
 }
 
@@ -22,27 +26,33 @@ select {
   font: inherit;
 }
 
+button {
+  border: none;
+}
+
 .app {
   min-height: 100vh;
-  padding: 32px;
+  padding: 28px 32px 40px;
 }
+
+/* Header */
 
 .hero {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 24px;
-  margin-bottom: 28px;
+  margin-bottom: 20px;
 }
 
 .hero h1 {
   margin: 0;
-  font-size: 44px;
+  font-size: 38px;
   letter-spacing: -0.04em;
 }
 
 .hero p {
-  max-width: 780px;
+  max-width: 760px;
   color: #b8b8c2;
   line-height: 1.6;
 }
@@ -50,8 +60,10 @@ select {
 .eyebrow {
   margin: 0 0 8px;
   color: #8f8fff;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.16em;
+  text-transform: uppercase;
 }
 
 .status-card {
@@ -69,11 +81,7 @@ select {
   margin-bottom: 6px;
 }
 
-.grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 20px;
-}
+/* Base layout */
 
 .panel {
   border: 1px solid #2d2d38;
@@ -87,44 +95,91 @@ select {
   margin: 0 0 10px;
 }
 
-.panel-subtitle {
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.play-layout {
+  display: grid;
+  grid-template-columns: minmax(340px, 0.85fr) minmax(420px, 1.15fr);
+  gap: 20px;
+  align-items: stretch;
+  margin-bottom: 20px;
+}
+
+.secondary-grid {
   margin-top: 0;
-  color: #a1a1aa;
 }
 
-.actions-panel {
-  grid-row: span 2;
+.error {
+  padding: 14px;
+  border: 1px solid #7f1d1d;
+  border-radius: 12px;
+  background: #2a1111;
+  color: #fecaca;
+  margin-bottom: 20px;
 }
 
-.action-list {
+.empty {
+  color: #8f8f9b;
+}
+
+/* Scenario and choices */
+
+.scenario-panel,
+.compact-map-panel {
+  min-height: 460px;
+}
+
+.scenario-panel h2 {
+  margin: 0 0 12px;
+  font-size: 28px;
+  letter-spacing: -0.03em;
+}
+
+.scenario-text {
+  color: #b8b8c2;
+  line-height: 1.6;
+  margin-bottom: 20px;
+}
+
+.choice-list {
   display: grid;
   gap: 12px;
-  margin-top: 18px;
 }
 
-.action-list button {
+.choice-button {
   width: 100%;
-  padding: 14px 16px;
+  padding: 15px 16px;
   border: 1px solid #3f3f4a;
-  border-radius: 12px;
-  background: #262633;
+  border-radius: 14px;
+  background: #181822;
   color: #ffffff;
   cursor: pointer;
   text-align: left;
+  display: grid;
+  gap: 5px;
 }
 
-.action-list button:hover {
-  background: #333345;
+.choice-button:hover {
+  background: #252536;
+  border-color: #5b5b72;
 }
 
-.action-list button:disabled {
+.choice-button:disabled {
   cursor: not-allowed;
-  opacity: 0.6;
+  opacity: 0.65;
 }
 
-.chart-wrap {
-  height: 280px;
+.choice-button span {
+  color: #a1a1aa;
+  font-size: 14px;
+  line-height: 1.4;
 }
+
+/* Lists */
 
 .list {
   display: grid;
@@ -145,6 +200,16 @@ select {
 .list-item small {
   color: #a1a1aa;
 }
+
+.timeline-panel {
+  grid-column: 1 / -1;
+}
+
+.compact-timeline {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* NPC panel */
 
 select {
   width: 100%;
@@ -180,66 +245,43 @@ select {
   font-weight: 700;
 }
 
-.error {
-  padding: 14px;
-  border: 1px solid #7f1d1d;
-  border-radius: 12px;
-  background: #2a1111;
-  color: #fecaca;
-  margin-bottom: 20px;
-}
+/* Compact world map */
 
-.empty {
-  color: #8f8f9b;
-}
-
-@media (max-width: 900px) {
-  .app {
-    padding: 20px;
-  }
-
-  .hero {
-    flex-direction: column;
-  }
-
-  .hero h1 {
-    font-size: 34px;
-  }
-
-  .grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-.map-panel {
-  grid-column: 1 / -1;
-  min-height: 620px;
+.compact-map-panel {
+  overflow: hidden;
 }
 
 .map-shell {
   width: 100%;
 }
 
+.compact-map-shell {
+  height: 100%;
+}
+
 .map-header {
   display: flex;
   justify-content: space-between;
   gap: 18px;
-  margin-bottom: 18px;
+  margin-bottom: 10px;
 }
 
 .map-header h2 {
-  margin: 0 0 8px;
+  margin: 0 0 4px;
 }
 
 .map-header p {
   margin: 0;
   color: #a1a1aa;
+  font-size: 14px;
 }
 
 .world-map {
   width: 100%;
-  min-height: 520px;
-  border-radius: 20px;
+  height: 370px;
+  min-height: 370px;
+  max-height: 370px;
+  border-radius: 18px;
   border: 1px solid #2f2f3a;
   background: #111118;
 }
@@ -251,9 +293,9 @@ select {
 .map-road {
   fill: none;
   stroke: #3f3f4a;
-  stroke-width: 16;
+  stroke-width: 13;
   stroke-linecap: round;
-  opacity: 0.65;
+  opacity: 0.62;
 }
 
 .map-crossroad {
@@ -263,7 +305,7 @@ select {
 
 .map-small-label {
   fill: #a1a1aa;
-  font-size: 13px;
+  font-size: 11px;
 }
 
 .territory {
@@ -298,18 +340,18 @@ select {
 
 .map-faction-name {
   fill: #ffffff;
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 800;
 }
 
 .map-description {
   fill: #d4d4d8;
-  font-size: 13px;
+  font-size: 11px;
 }
 
 .map-score {
   fill: #f4f4f5;
-  font-size: 15px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -333,44 +375,81 @@ select {
 
 .map-event-label {
   fill: #ffffff;
-  font-size: 14px;
+  font-size: 10px;
   font-weight: 700;
 }
 
-.map-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-  margin-top: 14px;
+/* Developer debug panel */
+
+.debug-panel {
+  grid-column: 1 / -1;
+  min-height: auto;
+}
+
+.debug-panel details {
+  width: 100%;
+}
+
+.debug-panel summary {
+  cursor: pointer;
+  font-weight: 800;
+  color: #f4f4f5;
+  padding: 8px 0;
+}
+
+.debug-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-top: 18px;
+}
+
+.debug-grid h3 {
+  margin-top: 0;
+}
+
+.debug-note {
   color: #a1a1aa;
-  font-size: 14px;
+  margin-bottom: 16px;
 }
 
-.map-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
+.chart-wrap {
+  height: 280px;
 }
 
-.legend-dot {
-  width: 11px;
-  height: 11px;
-  display: inline-block;
-  border-radius: 999px;
+/* Responsive */
+
+@media (max-width: 1050px) {
+  .play-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .world-map {
+    height: 360px;
+    min-height: 360px;
+    max-height: 360px;
+  }
+
+  .compact-timeline,
+  .debug-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
-.legend-trusted {
-  background: #22c55e;
-}
+@media (max-width: 900px) {
+  .app {
+    padding: 20px;
+  }
 
-.legend-neutral {
-  background: #a1a1aa;
-}
+  .hero {
+    flex-direction: column;
+  }
 
-.legend-hostile {
-  background: #ef4444;
-}
+  .hero h1 {
+    font-size: 34px;
+  }
 
-.legend-event {
-  background: #eab308;
+  .grid {
+    grid-template-columns: 1fr;
+  }
 }

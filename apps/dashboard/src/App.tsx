@@ -85,6 +85,7 @@ type LiveMessage = {
 
 type ActionPayload = {
   label: string;
+  description: string;
   actionType:
     | "HELP_FACTION"
     | "ROB_NPC"
@@ -98,7 +99,8 @@ type ActionPayload = {
 
 const demoActions: ActionPayload[] = [
   {
-    label: "Donate medicine to Elias",
+    label: "Give medicine to Elias",
+    description: "Help the Survivors keep Dusthaven Clinic running.",
     actionType: "DONATE_RESOURCE",
     targetFaction: "Survivors",
     npcId: "elias",
@@ -108,7 +110,8 @@ const demoActions: ActionPayload[] = [
     }
   },
   {
-    label: "Rob Mara",
+    label: "Rob Mara's supplies",
+    description: "Take water from the trader post by force.",
     actionType: "ROB_NPC",
     targetFaction: "Traders",
     npcId: "mara",
@@ -119,6 +122,7 @@ const demoActions: ActionPayload[] = [
   },
   {
     label: "Spare Knox",
+    description: "Let the Raider scout walk away from the checkpoint.",
     actionType: "SPARE_ENEMY",
     targetFaction: "Raiders",
     npcId: "knox",
@@ -128,7 +132,8 @@ const demoActions: ActionPayload[] = [
     }
   },
   {
-    label: "Attack Raider checkpoint",
+    label: "Attack the Raider checkpoint",
+    description: "Strike first before the Raiders regroup.",
     actionType: "ATTACK_FACTION",
     targetFaction: "Raiders",
     npcId: "knox",
@@ -162,7 +167,7 @@ function App() {
   );
   const [liveMessages, setLiveMessages] = useState<LiveMessage[]>([]);
   const [connectionStatus, setConnectionStatus] = useState("Disconnected");
-  const [loading, setLoading] = useState(false);
+  const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [error, setError] = useState("");
 
   const reputationChartData = useMemo(() => {
@@ -191,7 +196,7 @@ function App() {
   }
 
   async function triggerAction(action: ActionPayload) {
-    setLoading(true);
+    setLoadingAction(action.label);
     setError("");
 
     try {
@@ -213,12 +218,13 @@ function App() {
         throw new Error(`Action failed: ${response.status}`);
       }
 
+      setSelectedNpc(action.npcId);
       await loadPlayerState();
-      await loadNpcBehavior(selectedNpc);
+      await loadNpcBehavior(action.npcId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
-      setLoading(false);
+      setLoadingAction(null);
     }
   }
 
@@ -275,85 +281,63 @@ function App() {
 
   return (
     <main className="app">
-      <header className="hero">
+      <header className="hero compact-hero">
         <div>
           <p className="eyebrow">REMNANT</p>
-          <h1>Event-Driven Survival World</h1>
+          <h1>Survival Choice Engine</h1>
           <p>
-            Trigger player choices and watch faction reputation, NPC memory, and
-            world-state flags update through Kafka, PostgreSQL, Redis, and
-            WebSockets.
+            Make choices inside a persistent world. Factions, NPC memory, and
+            world-state flags update through the event pipeline.
           </p>
         </div>
 
         <div className="status-card">
-          <span className="status-label">WebSocket</span>
+          <span className="status-label">Live Connection</span>
           <strong>{connectionStatus}</strong>
         </div>
       </header>
 
       {error && <div className="error">{error}</div>}
 
-      <section className="grid">
-        <section className="panel map-panel">
-        <FactionWorldMap
-            reputation={playerState?.reputation ?? []}
-            worldState={playerState?.worldState ?? []}
-        />
-        </section>
-        <section className="panel actions-panel">
-          <h2>Player Choices</h2>
-          <p className="panel-subtitle">
-            Each button sends a committed action to the backend.
+      <section className="play-layout">
+        <section className="panel scenario-panel">
+          <p className="eyebrow">Current Scenario</p>
+          <h2>The Dusthaven Clinic is running out of medicine.</h2>
+          <p className="scenario-text">
+            Elias asks for help, Mara is guarding supplies at the trade post,
+            and Raider scouts are moving near the checkpoint. Your choice will
+            alter who trusts you, who remembers you, and what parts of the world
+            become safer or more dangerous.
           </p>
 
-          <div className="action-list">
+          <div className="choice-list">
             {demoActions.map((action) => (
               <button
                 key={action.label}
-                disabled={loading}
+                disabled={loadingAction !== null}
                 onClick={() => triggerAction(action)}
+                className="choice-button"
               >
-                {loading ? "Processing..." : action.label}
+                <strong>
+                  {loadingAction === action.label ? "Processing..." : action.label}
+                </strong>
+                <span>{action.description}</span>
               </button>
             ))}
           </div>
         </section>
 
-        <section className="panel">
-          <h2>Faction Reputation</h2>
-          <div className="chart-wrap">
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={reputationChartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="faction" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="score" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+        <section className="panel compact-map-panel">
+          <FactionWorldMap
+            reputation={playerState?.reputation ?? []}
+            worldState={playerState?.worldState ?? []}
+          />
         </section>
+      </section>
 
+      <section className="grid secondary-grid">
         <section className="panel">
-          <h2>World State Flags</h2>
-          <div className="list">
-            {playerState?.worldState.length ? (
-              playerState.worldState.map((flag) => (
-                <div key={flag.flag_key} className="list-item">
-                  <strong>{flag.flag_key}</strong>
-                  <span>{flag.description}</span>
-                  <small>{formatDate(flag.updated_at)}</small>
-                </div>
-              ))
-            ) : (
-              <p className="empty">No world-state flags yet.</p>
-            )}
-          </div>
-        </section>
-
-        <section className="panel">
-          <h2>NPC Behavior</h2>
+          <h2>NPC Reaction</h2>
 
           <select
             value={selectedNpc}
@@ -377,10 +361,27 @@ function App() {
         </section>
 
         <section className="panel">
+          <h2>World State Changes</h2>
+          <div className="list">
+            {playerState?.worldState.length ? (
+              playerState.worldState.map((flag) => (
+                <div key={flag.flag_key} className="list-item">
+                  <strong>{flag.flag_key}</strong>
+                  <span>{flag.description}</span>
+                  <small>{formatDate(flag.updated_at)}</small>
+                </div>
+              ))
+            ) : (
+              <p className="empty">No world-state flags yet.</p>
+            )}
+          </div>
+        </section>
+
+        <section className="panel timeline-panel">
           <h2>Recent Timeline</h2>
-            <div className="list">
+          <div className="list compact-timeline">
             {playerState?.recentTimeline.length ? (
-              playerState.recentTimeline.map((event) => (
+              playerState.recentTimeline.slice(0, 6).map((event) => (
                 <div key={event.event_id} className="list-item">
                   <strong>{event.action_type}</strong>
                   <span>
@@ -396,21 +397,56 @@ function App() {
           </div>
         </section>
 
-        <section className="panel">
-          <h2>Live Event Feed</h2>
-          <div className="list">
-            {liveMessages.length ? (
-              liveMessages.map((message, index) => (
-                <div key={`${message.eventId ?? message.type}-${index}`} className="list-item">
-                  <strong>{message.type}</strong>
-                  <span>{message.actionType ?? "System message"}</span>
-                  <small>{message.occurredAt ? formatDate(message.occurredAt) : ""}</small>
+        <section className="panel debug-panel">
+          <details>
+            <summary>Developer Debug Panel</summary>
+
+            <div className="debug-grid">
+              <section>
+                <h3>Reputation Graph</h3>
+                <p className="debug-note">
+                  Hidden by default so the player does not see exact numerical
+                  consequences during normal play.
+                </p>
+
+                <div className="chart-wrap">
+                  <ResponsiveContainer width="100%" height={260}>
+                    <BarChart data={reputationChartData}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="faction" />
+                      <YAxis />
+                      <Tooltip />
+                      <Bar dataKey="score" />
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>
-              ))
-            ) : (
-              <p className="empty">Waiting for live updates...</p>
-            )}
-          </div>
+              </section>
+
+              <section>
+                <h3>Live Event Feed</h3>
+                <div className="list">
+                  {liveMessages.length ? (
+                    liveMessages.map((message, index) => (
+                      <div
+                        key={`${message.eventId ?? message.type}-${index}`}
+                        className="list-item"
+                      >
+                        <strong>{message.type}</strong>
+                        <span>{message.actionType ?? "System message"}</span>
+                        <small>
+                          {message.occurredAt
+                            ? formatDate(message.occurredAt)
+                            : ""}
+                        </small>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="empty">Waiting for live updates...</p>
+                  )}
+                </div>
+              </section>
+            </div>
+          </details>
         </section>
       </section>
     </main>

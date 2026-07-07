@@ -34,45 +34,45 @@ const territories: Territory[] = [
   {
     factionId: "survivors",
     name: "Survivors",
-    x: 70,
-    y: 80,
-    width: 220,
-    height: 160,
-    labelX: 180,
-    labelY: 155,
+    x: 55,
+    y: 55,
+    width: 230,
+    height: 120,
+    labelX: 170,
+    labelY: 112,
     description: "Dusthaven Clinic"
   },
   {
     factionId: "traders",
     name: "Traders",
-    x: 370,
-    y: 70,
-    width: 240,
-    height: 150,
-    labelX: 490,
-    labelY: 145,
+    x: 450,
+    y: 45,
+    width: 230,
+    height: 120,
+    labelX: 565,
+    labelY: 102,
     description: "Mara's Trade Post"
   },
   {
     factionId: "raiders",
     name: "Raiders",
-    x: 110,
-    y: 320,
-    width: 260,
-    height: 160,
-    labelX: 240,
-    labelY: 395,
+    x: 95,
+    y: 255,
+    width: 250,
+    height: 120,
+    labelX: 220,
+    labelY: 312,
     description: "Raider Checkpoint"
   },
   {
     factionId: "order",
     name: "The Order",
-    x: 470,
-    y: 315,
-    width: 220,
-    height: 170,
-    labelX: 580,
-    labelY: 395,
+    x: 455,
+    y: 250,
+    width: 225,
+    height: 125,
+    labelX: 568,
+    labelY: 307,
     description: "Fort Providence"
   }
 ];
@@ -115,43 +115,34 @@ function FactionWorldMap({ reputation, worldState }: FactionWorldMapProps) {
   const raiderHostile = hasFlag(worldState, "raider_checkpoint_hostile");
 
   return (
-    <div className="map-shell">
-      <div className="map-header">
+    <div className="map-shell compact-map-shell">
+      <div className="map-header compact-map-header">
         <div>
-          <h2>Faction World Map</h2>
-          <p>
-            Reputation and world-state flags are projected onto the current
-            playable region.
-          </p>
+          <h2>World Map</h2>
+          <p>Territory status updates after each committed choice.</p>
         </div>
       </div>
 
       <svg
-        className="world-map"
-        viewBox="0 0 760 560"
+        className="world-map compact-world-map"
+        viewBox="0 0 760 430"
         role="img"
-        aria-label="REMNANT faction world map"
+        aria-label="REMNANT compact faction world map"
       >
-        <defs>
-          <filter id="territoryGlow" x="-20%" y="-20%" width="140%" height="140%">
-            <feDropShadow dx="0" dy="0" stdDeviation="5" floodOpacity="0.45" />
-          </filter>
-        </defs>
-
-        <rect x="0" y="0" width="760" height="560" rx="28" className="map-bg" />
+        <rect x="0" y="0" width="760" height="430" rx="24" className="map-bg" />
 
         <path
-          d="M320 20 C300 120 330 210 280 285 C230 360 260 470 225 540"
+          d="M325 10 C310 95 335 165 300 220 C260 285 250 335 245 420"
           className="map-road"
         />
         <path
-          d="M40 285 C160 250 270 300 380 265 C500 225 620 245 730 215"
+          d="M40 215 C160 180 260 225 385 205 C510 185 620 178 725 150"
           className="map-road"
         />
 
-        <circle cx="345" cy="278" r="9" className="map-crossroad" />
-        <text x="360" y="284" className="map-small-label">
-          Dead Route Crossroads
+        <circle cx="365" cy="205" r="8" className="map-crossroad" />
+        <text x="382" y="210" className="map-small-label">
+          Dead Route
         </text>
 
         {territories.map((territory) => {
@@ -165,14 +156,13 @@ function FactionWorldMap({ reputation, worldState }: FactionWorldMapProps) {
                 y={territory.y}
                 width={territory.width}
                 height={territory.height}
-                rx="22"
+                rx="18"
                 className={getTerritoryClass(score)}
-                filter="url(#territoryGlow)"
               />
 
               <text
                 x={territory.labelX}
-                y={territory.labelY - 22}
+                y={territory.labelY - 16}
                 textAnchor="middle"
                 className="map-faction-name"
               >
@@ -181,7 +171,7 @@ function FactionWorldMap({ reputation, worldState }: FactionWorldMapProps) {
 
               <text
                 x={territory.labelX}
-                y={territory.labelY + 2}
+                y={territory.labelY + 6}
                 textAnchor="middle"
                 className="map-description"
               >
@@ -194,7 +184,7 @@ function FactionWorldMap({ reputation, worldState }: FactionWorldMapProps) {
                 textAnchor="middle"
                 className="map-score"
               >
-                {standing} · {score}
+                {standing}
               </text>
             </g>
           );
@@ -202,8 +192,8 @@ function FactionWorldMap({ reputation, worldState }: FactionWorldMapProps) {
 
         {clinicSupplied && (
           <g>
-            <circle cx="250" cy="105" r="13" className="map-event-positive" />
-            <text x="270" y="111" className="map-event-label">
+            <circle cx="260" cy="72" r="9" className="map-event-positive" />
+            <text x="274" y="77" className="map-event-label">
               Clinic supplied
             </text>
           </g>
@@ -211,8 +201,8 @@ function FactionWorldMap({ reputation, worldState }: FactionWorldMapProps) {
 
         {marketUnstable && (
           <g>
-            <circle cx="585" cy="100" r="13" className="map-event-warning" />
-            <text x="605" y="106" className="map-event-label">
+            <circle cx="650" cy="62" r="9" className="map-event-warning" />
+            <text x="664" y="67" className="map-event-label">
               Market unstable
             </text>
           </g>
@@ -220,8 +210,8 @@ function FactionWorldMap({ reputation, worldState }: FactionWorldMapProps) {
 
         {ambushDisabled && (
           <g>
-            <circle cx="330" cy="345" r="13" className="map-event-positive" />
-            <text x="350" y="351" className="map-event-label">
+            <circle cx="318" cy="270" r="9" className="map-event-positive" />
+            <text x="332" y="275" className="map-event-label">
               Ambush disabled
             </text>
           </g>
@@ -229,28 +219,13 @@ function FactionWorldMap({ reputation, worldState }: FactionWorldMapProps) {
 
         {raiderHostile && (
           <g>
-            <circle cx="160" cy="455" r="13" className="map-event-danger" />
-            <text x="180" y="461" className="map-event-label">
+            <circle cx="130" cy="355" r="9" className="map-event-danger" />
+            <text x="144" y="360" className="map-event-label">
               Checkpoint hostile
             </text>
           </g>
         )}
       </svg>
-
-      <div className="map-legend">
-        <span>
-          <i className="legend-dot legend-trusted" /> Trusted/Friendly
-        </span>
-        <span>
-          <i className="legend-dot legend-neutral" /> Neutral
-        </span>
-        <span>
-          <i className="legend-dot legend-hostile" /> Suspicious/Hostile
-        </span>
-        <span>
-          <i className="legend-dot legend-event" /> World event
-        </span>
-      </div>
     </div>
   );
 }
