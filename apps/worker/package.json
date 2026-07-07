@@ -1,0 +1,23 @@
+{
+  "name": "@remnant/worker",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@remnant/shared": "0.1.0",
+    "kafkajs": "^2.2.4",
+    "pg": "^8.13.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "@types/pg": "^8.11.10",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.4"
+  }
+}

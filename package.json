@@ -1,0 +1,15 @@
+{
+  "name": "remnant",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/api",
+    "apps/worker",
+    "packages/shared"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "dev:api": "npm run dev -w apps/api",
+    "dev:worker": "npm run dev -w apps/worker"
+  }
+}
