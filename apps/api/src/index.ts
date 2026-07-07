@@ -64,6 +64,289 @@ app.get("/health", async () => {
   };
 });
 
+type PreviewReputationUpdate = {
+  factionId: string;
+  factionName?: string;
+  delta: number;
+  reason: "DIRECT_ACTION" | "FACTION_RELATIONSHIP";
+};
+
+type PreviewNpcMemory = {
+  npcId: string;
+  memoryType: string;
+  description: string;
+  intensity: number;
+} | null;
+
+type PreviewWorldFlag = {
+  flagKey: string;
+  flagValue: boolean;
+  description: string;
+};
+
+function normalizeFactionId(factionName?: string): string | null {
+  if (!factionName) return null;
+
+  const normalized = factionName.trim().toLowerCase();
+
+  const knownFactions: Record<string, string> = {
+    survivors: "survivors",
+    raiders: "raiders",
+    traders: "traders",
+    "the order": "order",
+    order: "order"
+  };
+
+  return knownFactions[normalized] ?? normalized.replace(/\s+/g, "_");
+}
+
+function getBaseReputationDelta(actionType: string): number {
+  switch (actionType) {
+    case "HELP_FACTION":
+      return 15;
+    case "DONATE_RESOURCE":
+      return 10;
+    case "ROB_NPC":
+      return -20;
+    case "ATTACK_FACTION":
+      return -25;
+    case "SPARE_ENEMY":
+      return 8;
+    default:
+      return 0;
+  }
+}
+
+function buildNpcMemoryPreview(action: {
+  actionType: string;
+  targetFaction?: string;
+  npcId?: string;
+  metadata?: {
+    resource?: string;
+    amount?: number;
+    location?: string;
+    notes?: string;
+  };
+}): PreviewNpcMemory {
+  if (!action.npcId) return null;
+
+  const npcId = action.npcId.toLowerCase();
+
+  switch (action.actionType) {
+    case "HELP_FACTION":
+      return {
+        npcId,
+        memoryType: "HELPED_ALLIED_FACTION",
+        description: `NPC may remember that the player helped ${action.targetFaction ?? "an allied faction"}.`,
+        intensity: 6
+      };
+
+    case "DONATE_RESOURCE":
+      return {
+        npcId,
+        memoryType: "DONATED_RESOURCE",
+        description: `NPC may remember that the player donated ${action.metadata?.amount ?? "some"} ${action.metadata?.resource ?? "resources"}.`,
+        intensity: 7
+      };
+
+    case "ROB_NPC":
+      return {
+        npcId,
+        memoryType: "ROBBED_BY_PLAYER",
+        description: "NPC may remember being robbed by the player.",
+        intensity: 9
+      };
+
+    case "SPARE_ENEMY":
+      return {
+        npcId,
+        memoryType: "SPARED_BY_PLAYER",
+        description: "NPC may remember that the player spared them.",
+        intensity: 8
+      };
+
+    case "ATTACK_FACTION":
+      return {
+        npcId,
+        memoryType: "ATTACKED_FACTION",
+        description: `NPC may remember that the player attacked ${action.targetFaction ?? "their faction"}.`,
+        intensity: 8
+      };
+
+    default:
+      return null;
+  }
+}
+
+function buildWorldFlagPreviews(action: {
+  actionType: string;
+  targetFaction?: string;
+  npcId?: string;
+  metadata?: {
+    resource?: string;
+    amount?: number;
+    location?: string;
+    notes?: string;
+  };
+}): PreviewWorldFlag[] {
+  const targetFactionId = normalizeFactionId(action.targetFaction);
+  const npcId = action.npcId?.toLowerCase();
+  const resource = action.metadata?.resource?.toLowerCase();
+
+  const flags: PreviewWorldFlag[] = [];
+
+  if (
+    action.actionType === "DONATE_RESOURCE" &&
+    targetFactionId === "survivors" &&
+    resource === "medicine"
+  ) {
+    flags.push({
+      flagKey: "survivors_clinic_supplied",
+      flagValue: true,
+      description:
+        "Dusthaven Clinic may become supplied if medicine is donated to the Survivors."
+    });
+  }
+
+  if (action.actionType === "ROB_NPC" && npcId === "mara") {
+    flags.push({
+      flagKey: "trader_market_unstable",
+      flagValue: true,
+      description: "Mara's trade post may become unstable if the player robs her."
+    });
+  }
+
+  if (action.actionType === "SPARE_ENEMY" && npcId === "knox") {
+    flags.push({
+      flagKey: "raider_checkpoint_ambush_disabled",
+      flagValue: true,
+      description:
+        "The Raider checkpoint ambush may be disabled if Knox is spared."
+    });
+  }
+
+  if (action.actionType === "ATTACK_FACTION" && targetFactionId === "raiders") {
+    flags.push({
+      flagKey: "raider_checkpoint_hostile",
+      flagValue: true,
+      description:
+        "The Raider checkpoint may become hostile if the player attacks Raiders."
+    });
+  }
+
+  return flags;
+}
+
+async function buildReputationPreview(action: {
+  actionType: string;
+  targetFaction?: string;
+}): Promise<PreviewReputationUpdate[]> {
+  const targetFactionId = normalizeFactionId(action.targetFaction);
+
+  if (!targetFactionId) {
+    return [];
+  }
+
+  const baseDelta = getBaseReputationDelta(action.actionType);
+
+  const factionResult = await db.query(
+    `
+    SELECT id, name
+    FROM factions
+    WHERE id = $1
+    `,
+    [targetFactionId]
+  );
+
+  const targetFactionName = factionResult.rows[0]?.name;
+
+  const directUpdate: PreviewReputationUpdate = {
+    factionId: targetFactionId,
+    factionName: targetFactionName,
+    delta: baseDelta,
+    reason: "DIRECT_ACTION"
+  };
+
+  const relationshipResult = await db.query<{
+    affected_faction_id: string;
+    faction_name: string;
+    influence_multiplier: string;
+  }>(
+    `
+    SELECT
+      fr.affected_faction_id,
+      f.name AS faction_name,
+      fr.influence_multiplier
+    FROM faction_relationships fr
+    JOIN factions f
+      ON f.id = fr.affected_faction_id
+    WHERE fr.source_faction_id = $1
+    `,
+    [targetFactionId]
+  );
+
+  const relationshipUpdates: PreviewReputationUpdate[] = relationshipResult.rows
+    .map((row) => {
+      const multiplier = Number(row.influence_multiplier);
+      const delta = Math.round(baseDelta * multiplier);
+
+      return {
+        factionId: row.affected_faction_id,
+        factionName: row.faction_name,
+        delta,
+        reason: "FACTION_RELATIONSHIP" as const
+      };
+    })
+    .filter((update) => update.delta !== 0);
+
+  return [directUpdate, ...relationshipUpdates];
+}
+
+
+app.post("/actions/preview", async (request, reply) => {
+  const parsed = CreatePlayerActionRequestSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    return reply.status(400).send({
+      error: "Invalid player action preview request",
+      details: parsed.error.flatten()
+    });
+  }
+
+  const action = parsed.data;
+
+  const reputationPreview = await buildReputationPreview({
+    actionType: action.actionType,
+    targetFaction: action.targetFaction
+  });
+
+  const npcMemoryPreview = buildNpcMemoryPreview({
+    actionType: action.actionType,
+    targetFaction: action.targetFaction,
+    npcId: action.npcId,
+    metadata: action.metadata
+  });
+
+  const worldFlagsPreview = buildWorldFlagPreviews({
+    actionType: action.actionType,
+    targetFaction: action.targetFaction,
+    npcId: action.npcId,
+    metadata: action.metadata
+  });
+
+  return reply.status(200).send({
+    playerId: action.playerId,
+    actionType: action.actionType,
+    targetFaction: action.targetFaction ?? null,
+    npcId: action.npcId ?? null,
+    reputationPreview,
+    npcMemoryPreview,
+    worldFlagsPreview,
+    committed: false
+  });
+});
+
+
 app.post("/actions", async (request, reply) => {
   const parsed = CreatePlayerActionRequestSchema.safeParse(request.body);
 
