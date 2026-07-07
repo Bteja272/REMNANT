@@ -127,6 +127,28 @@ button {
 }
 
 /* Scenario and choices */
+.scenario-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.reset-button {
+  padding: 8px 11px;
+  border: 1px solid #3f3f4a;
+  border-radius: 999px;
+  background: #17171f;
+  color: #d4d4d8;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.reset-button:hover {
+  background: #252536;
+  color: #ffffff;
+}
 
 .scenario-panel,
 .compact-map-panel {

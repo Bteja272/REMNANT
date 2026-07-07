@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import FactionWorldMap from "./components/FactionWorldMap";
 import {
+  START_SCENE_ID,
+  ScenarioChoice,
+  scenarioNodes
+} from "./game/scenario";
+import {
   Bar,
   BarChart,
   CartesianGrid,
@@ -83,66 +88,6 @@ type LiveMessage = {
   occurredAt?: string;
 };
 
-type ActionPayload = {
-  label: string;
-  description: string;
-  actionType:
-    | "HELP_FACTION"
-    | "ROB_NPC"
-    | "SPARE_ENEMY"
-    | "ATTACK_FACTION"
-    | "DONATE_RESOURCE";
-  targetFaction: string;
-  npcId: string;
-  metadata: Record<string, string | number>;
-};
-
-const demoActions: ActionPayload[] = [
-  {
-    label: "Give medicine to Elias",
-    description: "Help the Survivors keep Dusthaven Clinic running.",
-    actionType: "DONATE_RESOURCE",
-    targetFaction: "Survivors",
-    npcId: "elias",
-    metadata: {
-      resource: "medicine",
-      amount: 2
-    }
-  },
-  {
-    label: "Rob Mara's supplies",
-    description: "Take water from the trader post by force.",
-    actionType: "ROB_NPC",
-    targetFaction: "Traders",
-    npcId: "mara",
-    metadata: {
-      resource: "water",
-      amount: 1
-    }
-  },
-  {
-    label: "Spare Knox",
-    description: "Let the Raider scout walk away from the checkpoint.",
-    actionType: "SPARE_ENEMY",
-    targetFaction: "Raiders",
-    npcId: "knox",
-    metadata: {
-      location: "raider_checkpoint",
-      notes: "Player spared Knox after an ambush."
-    }
-  },
-  {
-    label: "Attack the Raider checkpoint",
-    description: "Strike first before the Raiders regroup.",
-    actionType: "ATTACK_FACTION",
-    targetFaction: "Raiders",
-    npcId: "knox",
-    metadata: {
-      location: "raider_checkpoint"
-    }
-  }
-];
-
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
 
@@ -158,6 +103,7 @@ function formatDate(value: string): string {
 }
 
 function App() {
+  const [currentSceneId, setCurrentSceneId] = useState(START_SCENE_ID);
   const [playerState, setPlayerState] = useState<PlayerStateResponse | null>(
     null
   );
@@ -167,8 +113,10 @@ function App() {
   );
   const [liveMessages, setLiveMessages] = useState<LiveMessage[]>([]);
   const [connectionStatus, setConnectionStatus] = useState("Disconnected");
-  const [loadingAction, setLoadingAction] = useState<string | null>(null);
+  const [loadingChoiceId, setLoadingChoiceId] = useState<string | null>(null);
   const [error, setError] = useState("");
+
+  const currentScene = scenarioNodes[currentSceneId];
 
   const reputationChartData = useMemo(() => {
     return (
@@ -195,48 +143,57 @@ function App() {
     setNpcBehavior(behavior);
   }
 
-  async function triggerAction(action: ActionPayload) {
-    setLoadingAction(action.label);
+  async function refreshView(npcId = selectedNpc) {
+    await loadPlayerState();
+    await loadNpcBehavior(npcId);
+  }
+
+  async function handleScenarioChoice(choice: ScenarioChoice) {
+    setLoadingChoiceId(choice.id);
     setError("");
 
     try {
-      const response = await fetch(`${API_BASE_URL}/actions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          playerId: PLAYER_ID,
-          actionType: action.actionType,
-          targetFaction: action.targetFaction,
-          npcId: action.npcId,
-          metadata: action.metadata
-        })
-      });
+      if (choice.action) {
+        const response = await fetch(`${API_BASE_URL}/actions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            playerId: PLAYER_ID,
+            actionType: choice.action.actionType,
+            targetFaction: choice.action.targetFaction,
+            npcId: choice.action.npcId,
+            metadata: choice.action.metadata
+          })
+        });
 
-      if (!response.ok) {
-        throw new Error(`Action failed: ${response.status}`);
+        if (!response.ok) {
+          throw new Error(`Action failed: ${response.status}`);
+        }
+
+        setSelectedNpc(choice.action.npcId);
+        await refreshView(choice.action.npcId);
+      } else {
+        await refreshView();
       }
 
-      setSelectedNpc(action.npcId);
-      await loadPlayerState();
-      await loadNpcBehavior(action.npcId);
+      setCurrentSceneId(choice.nextSceneId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
-      setLoadingAction(null);
+      setLoadingChoiceId(null);
     }
   }
 
-  useEffect(() => {
-    loadPlayerState().catch((err) => {
-      setError(err instanceof Error ? err.message : "Failed to load state");
-    });
+  function resetScenario() {
+    setCurrentSceneId(START_SCENE_ID);
+    setSelectedNpc("elias");
+  }
 
-    loadNpcBehavior(selectedNpc).catch((err) => {
-      setError(
-        err instanceof Error ? err.message : "Failed to load NPC behavior"
-      );
+  useEffect(() => {
+    refreshView().catch((err) => {
+      setError(err instanceof Error ? err.message : "Failed to load state");
     });
   }, []);
 
@@ -261,8 +218,7 @@ function App() {
       setLiveMessages((current) => [message, ...current].slice(0, 10));
 
       if (message.type === "PLAYER_STATE_UPDATED") {
-        await loadPlayerState();
-        await loadNpcBehavior(selectedNpc);
+        await refreshView(selectedNpc);
       }
     };
 
@@ -281,13 +237,13 @@ function App() {
 
   return (
     <main className="app">
-      <header className="hero compact-hero">
+      <header className="hero">
         <div>
           <p className="eyebrow">REMNANT</p>
           <h1>Survival Choice Engine</h1>
           <p>
-            Make choices inside a persistent world. Factions, NPC memory, and
-            world-state flags update through the event pipeline.
+            Play through a branching survival scenario where choices update
+            faction trust, NPC memory, world-state flags, and live map feedback.
           </p>
         </div>
 
@@ -301,27 +257,32 @@ function App() {
 
       <section className="play-layout">
         <section className="panel scenario-panel">
-          <p className="eyebrow">Current Scenario</p>
-          <h2>The Dusthaven Clinic is running out of medicine.</h2>
-          <p className="scenario-text">
-            Elias asks for help, Mara is guarding supplies at the trade post,
-            and Raider scouts are moving near the checkpoint. Your choice will
-            alter who trusts you, who remembers you, and what parts of the world
-            become safer or more dangerous.
-          </p>
+          <div className="scenario-topline">
+            <p className="eyebrow">{currentScene.chapter}</p>
+
+            <button className="reset-button" onClick={resetScenario}>
+              Reset scene
+            </button>
+          </div>
+
+          <h2>{currentScene.title}</h2>
+
+          <p className="scenario-text">{currentScene.text}</p>
 
           <div className="choice-list">
-            {demoActions.map((action) => (
+            {currentScene.choices.map((choice) => (
               <button
-                key={action.label}
-                disabled={loadingAction !== null}
-                onClick={() => triggerAction(action)}
+                key={choice.id}
+                disabled={loadingChoiceId !== null}
+                onClick={() => handleScenarioChoice(choice)}
                 className="choice-button"
               >
                 <strong>
-                  {loadingAction === action.label ? "Processing..." : action.label}
+                  {loadingChoiceId === choice.id
+                    ? "Processing..."
+                    : choice.label}
                 </strong>
-                <span>{action.description}</span>
+                <span>{choice.description}</span>
               </button>
             ))}
           </div>
@@ -362,6 +323,7 @@ function App() {
 
         <section className="panel">
           <h2>World State Changes</h2>
+
           <div className="list">
             {playerState?.worldState.length ? (
               playerState.worldState.map((flag) => (
@@ -379,6 +341,7 @@ function App() {
 
         <section className="panel timeline-panel">
           <h2>Recent Timeline</h2>
+
           <div className="list compact-timeline">
             {playerState?.recentTimeline.length ? (
               playerState.recentTimeline.slice(0, 6).map((event) => (
@@ -424,6 +387,7 @@ function App() {
 
               <section>
                 <h3>Live Event Feed</h3>
+
                 <div className="list">
                   {liveMessages.length ? (
                     liveMessages.map((message, index) => (
