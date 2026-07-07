@@ -1,3 +1,4 @@
+import Redis from "ioredis";
 import { Kafka } from "kafkajs";
 import { Pool } from "pg";
 import {
@@ -13,9 +14,13 @@ const CONSUMER_GROUP_ID =
 const DATABASE_URL =
   process.env.DATABASE_URL ?? "postgres://remnant:remnant@localhost:5432/remnant";
 
+const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
+
 const db = new Pool({
   connectionString: DATABASE_URL
 });
+
+const redis = new Redis(REDIS_URL);
 
 type ReputationUpdate = {
   factionId: string;
@@ -38,6 +43,12 @@ type WorldStateFlag = {
   flagValue: boolean;
   description: string;
   sourceEventId: string;
+};
+
+type ProcessResult = {
+  reputationUpdated: boolean;
+  npcMemoryUpdated: boolean;
+  worldStateUpdated: boolean;
 };
 
 function normalizeFactionId(factionName?: string): string | null {
@@ -163,8 +174,7 @@ function buildWorldStateFlags(event: PlayerActionCreatedEvent): WorldStateFlag[]
       playerId: event.playerId,
       flagKey: "trader_market_unstable",
       flagValue: true,
-      description:
-        "Mara's trade post is unstable after the player robbed her.",
+      description: "Mara's trade post is unstable after the player robbed her.",
       sourceEventId: event.eventId
     });
   }
@@ -283,12 +293,12 @@ async function applySingleReputationUpdate(
 
 async function applyReputationUpdates(
   event: PlayerActionCreatedEvent
-): Promise<void> {
+): Promise<boolean> {
   const targetFactionId = normalizeFactionId(event.targetFaction);
 
   if (!targetFactionId) {
     console.log("[worker] No target faction present. Skipping reputation update.");
-    return;
+    return false;
   }
 
   const baseDelta = getBaseReputationDelta(event);
@@ -309,14 +319,16 @@ async function applyReputationUpdates(
   for (const update of allUpdates) {
     await applySingleReputationUpdate(event.playerId, update);
   }
+
+  return allUpdates.length > 0;
 }
 
-async function saveNpcMemory(event: PlayerActionCreatedEvent): Promise<void> {
+async function saveNpcMemory(event: PlayerActionCreatedEvent): Promise<boolean> {
   const memory = buildNpcMemory(event);
 
   if (!memory) {
     console.log("[worker] No NPC memory generated for this event.");
-    return;
+    return false;
   }
 
   await db.query(
@@ -344,16 +356,18 @@ async function saveNpcMemory(event: PlayerActionCreatedEvent): Promise<void> {
   console.log(
     `[worker] NPC memory saved: npc=${memory.npcId}, player=${memory.playerId}, memory=${memory.memoryType}, intensity=${memory.intensity}`
   );
+
+  return true;
 }
 
 async function saveWorldStateFlags(
   event: PlayerActionCreatedEvent
-): Promise<void> {
+): Promise<boolean> {
   const flags = buildWorldStateFlags(event);
 
   if (flags.length === 0) {
     console.log("[worker] No world state flags generated for this event.");
-    return;
+    return false;
   }
 
   for (const flag of flags) {
@@ -388,18 +402,145 @@ async function saveWorldStateFlags(
       `[worker] World state flag updated: player=${flag.playerId}, flag=${flag.flagKey}, value=${flag.flagValue}`
     );
   }
+
+  return true;
 }
 
-async function processPlayerAction(event: PlayerActionCreatedEvent): Promise<void> {
+async function refreshRedisReputation(playerId: string): Promise<void> {
+  const result = await db.query(
+    `
+    SELECT
+      pfr.faction_id,
+      f.name AS faction_name,
+      pfr.reputation_score,
+      pfr.updated_at
+    FROM player_faction_reputation pfr
+    JOIN factions f
+      ON f.id = pfr.faction_id
+    WHERE pfr.player_id = $1
+    ORDER BY pfr.faction_id
+    `,
+    [playerId]
+  );
+
+  await redis.set(
+    `player:${playerId}:reputation`,
+    JSON.stringify(result.rows),
+    "EX",
+    3600
+  );
+
+  console.log(`[worker] Redis reputation cache refreshed for player=${playerId}`);
+}
+
+async function refreshRedisWorldState(playerId: string): Promise<void> {
+  const result = await db.query(
+    `
+    SELECT
+      flag_key,
+      flag_value,
+      description,
+      source_event_id,
+      updated_at
+    FROM world_state_flags
+    WHERE player_id = $1
+    ORDER BY updated_at DESC
+    `,
+    [playerId]
+  );
+
+  await redis.set(
+    `player:${playerId}:world_state`,
+    JSON.stringify(result.rows),
+    "EX",
+    3600
+  );
+
+  console.log(`[worker] Redis world-state cache refreshed for player=${playerId}`);
+}
+
+async function addRedisLatestEvent(event: PlayerActionCreatedEvent): Promise<void> {
+  const key = `player:${event.playerId}:latest_events`;
+
+  await redis.lpush(
+    key,
+    JSON.stringify({
+      eventId: event.eventId,
+      eventType: event.eventType,
+      occurredAt: event.occurredAt,
+      actionType: event.actionType,
+      targetFaction: event.targetFaction ?? null,
+      npcId: event.npcId ?? null,
+      metadata: event.metadata ?? {}
+    })
+  );
+
+  await redis.ltrim(key, 0, 24);
+  await redis.expire(key, 3600);
+
+  console.log(`[worker] Redis latest event list updated for player=${event.playerId}`);
+}
+
+async function publishRedisUpdate(
+  event: PlayerActionCreatedEvent,
+  result: ProcessResult
+): Promise<void> {
+  const channel = `channel:${event.playerId}:updates`;
+
+  const message = {
+    type: "PLAYER_STATE_UPDATED",
+    playerId: event.playerId,
+    eventId: event.eventId,
+    actionType: event.actionType,
+    targetFaction: event.targetFaction ?? null,
+    npcId: event.npcId ?? null,
+    reputationUpdated: result.reputationUpdated,
+    npcMemoryUpdated: result.npcMemoryUpdated,
+    worldStateUpdated: result.worldStateUpdated,
+    occurredAt: event.occurredAt
+  };
+
+  await redis.publish(channel, JSON.stringify(message));
+
+  console.log(`[worker] Redis update published to ${channel}`);
+}
+
+async function refreshRedisActiveState(
+  event: PlayerActionCreatedEvent,
+  result: ProcessResult
+): Promise<void> {
+  await refreshRedisReputation(event.playerId);
+  await refreshRedisWorldState(event.playerId);
+  await addRedisLatestEvent(event);
+  await publishRedisUpdate(event, result);
+}
+
+async function processPlayerAction(
+  event: PlayerActionCreatedEvent
+): Promise<ProcessResult> {
   await saveChoiceEvent(event);
-  await applyReputationUpdates(event);
-  await saveNpcMemory(event);
-  await saveWorldStateFlags(event);
+
+  const reputationUpdated = await applyReputationUpdates(event);
+  const npcMemoryUpdated = await saveNpcMemory(event);
+  const worldStateUpdated = await saveWorldStateFlags(event);
+
+  const result: ProcessResult = {
+    reputationUpdated,
+    npcMemoryUpdated,
+    worldStateUpdated
+  };
+
+  await refreshRedisActiveState(event, result);
+
+  return result;
 }
 
 async function startWorker() {
   await db.query("SELECT 1");
   console.log("[worker] Connected to PostgreSQL");
+
+  await redis.ping();
+  console.log("[worker] Connected to Redis");
 
   const kafka = new Kafka({
     clientId: "remnant-worker",
@@ -469,10 +610,8 @@ async function startWorker() {
       console.log("------------------------------------------");
 
       try {
-        await processPlayerAction(event);
-        console.log(
-          "[worker] Event persisted, consequences applied, NPC memory updated, and world state flags updated\n"
-        );
+        const result = await processPlayerAction(event);
+        console.log("[worker] Event fully processed", result, "\n");
       } catch (error) {
         console.error("[worker] Failed to process event", {
           eventId: event.eventId,
@@ -485,6 +624,7 @@ async function startWorker() {
 
 process.on("SIGINT", async () => {
   console.log("[worker] Shutting down");
+  await redis.quit();
   await db.end();
   process.exit(0);
 });

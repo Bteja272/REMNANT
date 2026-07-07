@@ -83,10 +83,13 @@ services:
         condition: service_started
       postgres:
         condition: service_started
+      redis:
+        condition: service_started
     environment:
       KAFKA_BROKER: remnant-kafka:29092
       CONSUMER_GROUP_ID: remnant-consequence-worker
       DATABASE_URL: postgres://remnant:remnant@remnant-postgres:5432/remnant
+      REDIS_URL: redis://remnant-redis:6379
     volumes:
       - .:/app
     command: sh -c "npm install && npm run build -w packages/shared && npm run dev -w apps/worker"
