@@ -1,374 +1,328 @@
-# REMNANT: Event-Driven Game State Simulation Engine
+# 🌆 REMNANT: Event-Driven Game State Simulation Engine
 
-REMNANT is an event-driven post-apocalyptic game-state simulation backend where player choices create persistent consequences across factions, world state, and future NPC behavior.
+[![CI](https://github.com/Bteja272/remnant/actions/workflows/ci.yml/badge.svg)](https://github.com/Bteja272/remnant/actions)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.0%2B-3178C6?style=flat&logo=typescript&logoColor=white)
+![Kafka](https://img.shields.io/badge/Apache_Kafka-Event_Streaming-231F20?style=flat&logo=apachekafka&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green?style=flat)
 
-The current milestone implements the first working vertical slice:
+> A distributed, event-driven game-state backend where every player choice generates a Kafka event that propagates consequences across faction reputations, NPC memory, and world-state flags — persisted in PostgreSQL/TimescaleDB and cached in Redis. Inspired by the consequence systems in Detroit: Become Human and Red Dead Redemption 2.
+
+---
+
+## 📌 Overview
+
+REMNANT is the backend simulation engine for a choice-driven post-apocalyptic world. It is not a full 3D game — it is the distributed systems layer that makes a consequence-driven world work.
+
+Every player action flows through a complete event pipeline:
 
 ```text
-POST /actions
-    ↓
+Player Choice
+     ↓
 Fastify TypeScript API
-    ↓
-Kafka topic: player.action.created
-    ↓
-TypeScript worker
-    ↓
-PostgreSQL / TimescaleDB event persistence
-    ↓
-Faction reputation update
-Project Goal
+     ↓
+Kafka Event Stream (player.action.created)
+     ↓
+TypeScript Consequence Worker
+     ↓
+Faction Reputation Propagation
+NPC Memory Creation
+World-State Flag Updates
+     ↓
+Read APIs expose live world state
+```
 
-The long-term goal is to build a game-systems backend inspired by consequence-heavy games like Detroit: Become Human and Red Dead Redemption 2.
+**Example:** A player donates medicine to the Survivors near NPC Elias:
+- Survivors reputation increases
+- Raiders reputation decreases through relationship propagation
+- Traders reputation increases slightly
+- Elias stores a `DONATED_RESOURCE` memory and offers help on future encounters
+- `survivors_clinic_supplied` world-state flag becomes `true`
 
-Each player action should ripple through the world:
+---
 
-Helping one faction can make another faction hostile.
-NPCs can remember previous interactions.
-World-state flags can change based on accumulated decisions.
-Choice history can be replayed over time.
-A future dashboard will visualize live faction reputation and world-state changes.
+## 🏗️ Key Technical Decisions
 
-This is not a full playable game yet. The current focus is the distributed backend architecture behind a reactive game world.
+**Why Kafka for player actions instead of direct DB writes?**
+Player choices need to be decoupled from consequence processing. A direct write approach would tightly couple action ingestion speed to consequence calculation time. Kafka allows the API to accept actions instantly, while the worker processes consequences asynchronously — the same pattern used in real MMO backends.
 
-Current Features
-TypeScript Fastify API
-Kafka event publishing for player actions
-TypeScript Kafka worker
-PostgreSQL / TimescaleDB persistence
-Redis service running for future active-session state
-Docker Compose local infrastructure
-Shared TypeScript event schema package
-Basic faction reputation mutation
-Seeded demo player and factions
+**Why TimescaleDB for choice events?**
+Choice history is fundamentally time-series data — every event has a timestamp and queries are almost always time-ordered ("what did this player do in the last 10 sessions?"). TimescaleDB hypertables provide automatic time-based partitioning for efficient historical queries without changing the PostgreSQL interface.
 
-Current working behavior:
+**Why a separate consequence worker instead of processing in the API?**
+Consequence calculation involves multiple database writes — reputation updates, NPC memory creation, world-state flag changes, faction relationship propagation. Processing this synchronously in the API would block the request and create partial-write failure risks. The worker handles consequences transactionally after the Kafka event is confirmed.
 
-HELP_FACTION Survivors
-    → Kafka event created
-    → event saved to choice_events
-    → Survivors reputation increases by +15
-Tech Stack
-Layer	Technology
-API	Node.js, TypeScript, Fastify
-Event Streaming	Kafka, KafkaJS
-Worker	TypeScript
-Database	PostgreSQL, TimescaleDB
-Cache	Redis
-Validation	Zod
-Infrastructure	Docker Compose
-Future Simulation Engine	C++
-Future Frontend	React, TypeScript, WebSockets
-Repository Structure
-remnant/
-  apps/
-    api/
-      src/
-        index.ts
-      package.json
-      tsconfig.json
+**Why Zod for event schema validation?**
+Event schemas shared between the API and worker are the most common source of bugs in event-driven systems. Defining schemas once in the shared package and validating at both the API boundary and worker input prevents schema drift and makes debugging significantly easier.
 
-    worker/
-      src/
-        index.ts
-      package.json
-      tsconfig.json
+---
 
-  packages/
-    shared/
-      src/
-        events/
-          playerActionCreated.ts
-        index.ts
-      package.json
-      tsconfig.json
+## 🛠️ Tech Stack
 
-  infra/
-    db/
-      init.sql
+| Layer | Technology |
+|---|---|
+| API | Node.js · TypeScript · Fastify |
+| Event Streaming | Apache Kafka · KafkaJS |
+| Consequence Worker | TypeScript |
+| Validation | Zod |
+| Database | PostgreSQL · TimescaleDB |
+| Cache | Redis |
+| Infrastructure | Docker Compose |
 
-  docker-compose.yml
-  package.json
-  README.md
-  .gitignore
-Architecture
-Client / curl / future dashboard
+---
+
+## 📡 System Architecture
+
+```text
+Client / curl / React UI (planned)
         ↓
 POST /actions
         ↓
-Fastify API
+Fastify API → Zod validation
         ↓
 Kafka topic: player.action.created
         ↓
-Consequence Worker
+TypeScript Consequence Worker
+        ↓
+┌───────────────────────────────────┐
+│  Faction Reputation Propagation   │
+│  NPC Memory Creation              │
+│  World-State Flag Updates         │
+│  Choice Event Persistence         │
+└───────────────────────────────────┘
         ↓
 PostgreSQL / TimescaleDB
         ↓
-Faction reputation table
+Redis Cache (active world state)
+        ↓
+Read APIs → GET /players/:id/state
+```
 
-Future architecture:
+---
 
-Player Action
-   ↓
-TypeScript API
-   ↓
-Kafka Event Stream
-   ↓
-TypeScript Consequence Worker
-   ↓
-C++ Consequence Engine
-   ↓
-PostgreSQL / TimescaleDB / Redis
-   ↓
-WebSocket Updates
-   ↓
-React + TypeScript Dashboard
-Event Schema
+## ✨ Features
 
-Current Kafka topic:
+### ⚡ Event-Driven Choice Pipeline
+- Player actions publish typed Kafka events validated with Zod
+- Consequence worker processes events asynchronously
+- Choice events persisted as TimescaleDB hypertable for time-ordered history
+- Full end-to-end flow from API call to world state update
 
-player.action.created
+### 🏴 Faction Reputation System
+- Direct reputation changes applied to target faction on player action
+- Secondary effects propagate automatically through faction relationship graph
+- Four factions with configurable relationship weights: Survivors, Raiders, Traders, The Order
 
-Example event:
+### 🧠 NPC Memory System
+- NPCs store typed memories of significant player interactions
+- Memories drive behavior changes on future encounters
+- Behavior API returns current NPC disposition based on accumulated memory
 
-{
-  "eventId": "generated-uuid",
-  "eventType": "player.action.created",
-  "occurredAt": "2026-07-07T01:46:44.364Z",
-  "playerId": "player_001",
-  "actionType": "HELP_FACTION",
-  "targetFaction": "Survivors",
-  "npcId": "elias",
-  "metadata": {
-    "resource": "medicine",
-    "amount": 2
-  }
-}
+### 🌍 World-State Flag System
+- Persistent boolean flags capturing global world consequences
+- Actions trigger flag changes that affect future game scenarios
+- Player and global world-state queryable via dedicated APIs
 
-Supported action types:
+### 📊 Player State APIs
+- Combined player state endpoint returning reputation, timeline, and world flags in one call
+- Choice history timeline for reviewing player decisions
+- Per-faction reputation breakdown
 
-HELP_FACTION
-ROB_NPC
-SPARE_ENEMY
-ATTACK_FACTION
-DONATE_RESOURCE
-Database Tables
+---
 
-Current tables:
+## 🎮 Consequence Rules
 
+### Faction Reputation Propagation
+
+Player actions affect the target faction directly, then propagate through faction relationships:
+
+```
+HELP_FACTION Survivors
+    → Survivors  +15
+    → Raiders    -11  (enemies of Survivors)
+    → Traders    +3   (allied with Survivors)
+    → The Order  0    (neutral)
+```
+
+### NPC Memory
+
+| Action | NPC | Memory | Behavior |
+|---|---|---|---|
+| `DONATE_RESOURCE` near Elias | Elias | `DONATED_RESOURCE` | `OFFERS_HELP` |
+| `ROB_NPC` Mara | Mara | `ROBBED_BY_PLAYER` | `LOCK_DOORS` |
+| `SPARE_ENEMY` Knox | Knox | `SPARED_BY_PLAYER` | `SHOWS_MERCY` |
+
+### World-State Flags
+
+| Action | Flag | Value |
+|---|---|---|
+| Donate medicine to Survivors | `survivors_clinic_supplied` | `true` |
+| Rob Mara | `trader_market_unstable` | `true` |
+| Spare Knox | `raider_checkpoint_ambush_disabled` | `true` |
+| Attack Raiders | `raider_checkpoint_hostile` | `true` |
+
+---
+
+## 🗃️ Database Schema
+
+```text
 players
 factions
+faction_relationships
 player_faction_reputation
-choice_events
+choice_events              ← TimescaleDB hypertable (occurred_at)
+npcs
+npc_memory
+world_state_flags
+```
 
-The choice_events table is configured as a TimescaleDB hypertable using occurred_at.
+**Seeded data:**
+- Player: `player_001`
+- Factions: `survivors` · `raiders` · `traders` · `order`
+- NPCs: `elias` · `mara` · `knox`
 
-Seeded factions:
+---
 
-survivors
-raiders
-traders
-order
+## 📁 Repository Structure
 
-Seeded player:
+```text
+remnant/
+  apps/
+    api/                   Fastify TypeScript API
+    worker/                Kafka consequence worker
+  packages/
+    shared/                Typed event schemas (Zod)
+  infra/
+    db/
+      init.sql             Database schema
+  docker-compose.yml
+  README.md
+```
 
-player_001
-Running Locally
-Prerequisites
+---
 
-Install:
+## 🚀 Quick Start
 
-Docker Desktop
-WSL 2
-Node.js inside WSL, preferably through nvm
-npm
+### Prerequisites
+- Docker Desktop
+- Node.js 20+ (via nvm in WSL recommended)
 
-Verify WSL is using Linux Node, not Windows Node:
-
-which node
-which npm
-
-Expected output should look like:
-
-/home/<user>/.nvm/versions/node/v20.x.x/bin/node
-/home/<user>/.nvm/versions/node/v20.x.x/bin/npm
-
-It should not point to:
-
-/mnt/c/Program Files/nodejs/
-Install Dependencies
-
-From the project root:
-
+```bash
+# Install dependencies
 npm install
 
-Build all workspaces:
-
+# Build all workspaces
 npm run build
 
-Or build individually:
-
-npm run build -w packages/shared
-npm run build -w apps/api
-npm run build -w apps/worker
-Start the Full Stack
-
-From the project root:
-
+# Start full stack
 docker compose up --build
+```
 
-This starts:
-
-Kafka
-Zookeeper
-PostgreSQL / TimescaleDB
-Redis
-API service
-Worker service
-
-If the database schema changes and the local volume needs to be reset:
-
-docker compose down -v
-docker compose up --build
-
-Use down -v carefully because it deletes the local database volume.
-
-Health Check
-
-In a second terminal:
-
+**Health check:**
+```bash
 curl http://localhost:3000/health
-
-Expected response:
-
+```
+```json
 {
   "status": "ok",
   "service": "remnant-api",
-  "kafkaBroker": "remnant-kafka:29092"
+  "kafkaBroker": "remnant-kafka:29092",
+  "database": "connected"
 }
-Send a Player Action
+```
+
+> If you change the database schema, reset the volume with `docker compose down -v` before rebuilding.
+
+---
+
+## 🔌 API Reference
+
+### Actions
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/actions` | Submit a player choice |
+
+```bash
 curl -X POST http://localhost:3000/actions \
   -H "Content-Type: application/json" \
   -d '{
     "playerId": "player_001",
-    "actionType": "HELP_FACTION",
+    "actionType": "DONATE_RESOURCE",
     "targetFaction": "Survivors",
     "npcId": "elias",
-    "metadata": {
-      "resource": "medicine",
-      "amount": 2
-    }
+    "metadata": { "resource": "medicine", "amount": 2 }
   }'
+```
 
-Expected response:
+**Supported action types:** `HELP_FACTION` · `ROB_NPC` · `SPARE_ENEMY` · `ATTACK_FACTION` · `DONATE_RESOURCE`
 
-{
-  "status": "accepted",
-  "eventType": "player.action.created",
-  "eventId": "generated-event-id"
-}
+### Player State
 
-Expected worker logs:
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/players/:id/state` | Full player state (reputation + timeline + world flags) |
+| `GET` | `/players/:id/reputation` | Current faction reputation |
+| `GET` | `/players/:id/timeline` | Choice history |
+| `GET` | `/players/:id/world-state` | Player world-state flags |
 
-[worker] Received player.action.created event
-[worker] Reputation updated: player=player_001, faction=survivors, delta=15
-[worker] Event persisted and consequences applied
-Verify Database State
+### NPCs and World
 
-Open psql inside the Postgres container:
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/npcs/:id/behavior?playerId=` | NPC behavior based on player memory |
+| `GET` | `/world/state` | Global world-state flags |
 
-docker exec -it remnant-postgres psql -U remnant -d remnant
+---
 
-View recent choice events:
+## 🎬 Demo Scenario
 
-SELECT event_id, player_id, action_type, target_faction, occurred_at
-FROM choice_events
-ORDER BY occurred_at DESC
-LIMIT 5;
+Run these three actions to demonstrate the full consequence pipeline:
 
-View faction reputation:
+```bash
+# 1. Donate medicine to Survivors (Elias remembers, clinic opens)
+curl -X POST http://localhost:3000/actions \
+  -H "Content-Type: application/json" \
+  -d '{"playerId":"player_001","actionType":"DONATE_RESOURCE","targetFaction":"Survivors","npcId":"elias","metadata":{"resource":"medicine","amount":2}}'
 
-SELECT *
-FROM player_faction_reputation
-ORDER BY player_id, faction_id;
+# 2. Rob Mara the trader (market destabilizes, Mara locks doors)
+curl -X POST http://localhost:3000/actions \
+  -H "Content-Type: application/json" \
+  -d '{"playerId":"player_001","actionType":"ROB_NPC","targetFaction":"Traders","npcId":"mara","metadata":{"resource":"water","amount":1}}'
 
-Expected result after one HELP_FACTION action targeting Survivors:
+# 3. Spare Knox the raider (checkpoint disarms, Knox shows mercy)
+curl -X POST http://localhost:3000/actions \
+  -H "Content-Type: application/json" \
+  -d '{"playerId":"player_001","actionType":"SPARE_ENEMY","targetFaction":"Raiders","npcId":"knox","metadata":{"location":"raider_checkpoint"}}'
 
-player_001 | survivors | 15
+# Verify NPC behaviors changed
+curl "http://localhost:3000/npcs/elias/behavior?playerId=player_001"   # OFFERS_HELP
+curl "http://localhost:3000/npcs/mara/behavior?playerId=player_001"    # LOCK_DOORS
+curl "http://localhost:3000/npcs/knox/behavior?playerId=player_001"    # SHOWS_MERCY
 
-Exit psql:
+# Verify full world state
+curl http://localhost:3000/players/player_001/state
+curl http://localhost:3000/world/state
+```
 
-\q
-Current Milestone Status
+---
 
-Completed:
+## 🗺️ Roadmap
 
-Monorepo setup
-Shared TypeScript event schema
-Fastify API
-Kafka producer
-Kafka worker consumer
-PostgreSQL / TimescaleDB schema
-Demo player/faction seed data
-Choice event persistence
-Direct faction reputation update
+- [ ] Redis-backed active player/world cache for sub-millisecond state reads
+- [ ] WebSocket updates pushing live consequence events to frontend
+- [ ] React + TypeScript playable dashboard with choice UI and live world map
+- [ ] C++ consequence simulation engine replacing TypeScript consequence logic
+- [ ] GitHub Actions CI pipeline
+- [ ] Multi-player shared world state
+- [ ] Additional factions, NPCs, and consequence rules
+- [ ] Demo video/GIF
 
-Next milestone:
+---
 
-Faction relationship propagation
+## 📝 License
 
-Example target behavior:
+MIT License
 
-HELP_FACTION Survivors
-    → Survivors +15
-    → Raiders -10
-    → Traders +3
-    → Order 0
+---
 
-Future milestones:
-
-NPC memory system
-Redis-backed active world state
-WebSocket world updates
-React + TypeScript dashboard
-C++ consequence simulation engine
-Dockerized full demo
-GitHub Actions CI
-Demo video/GIF
-Planned C++ Integration
-
-The C++ engine will be added as a standalone consequence simulation executable.
-
-Planned flow:
-
-TypeScript worker
-    ↓
-C++ consequence engine
-    ↓
-JSON consequence output
-    ↓
-PostgreSQL / Redis updates
-
-The first C++ version will likely run as a CLI executable:
-
-./remnant_engine input.json
-
-It will return structured consequence output:
-
-{
-  "reputationDeltas": {
-    "survivors": 15,
-    "raiders": -10,
-    "traders": 3,
-    "order": 0
-  },
-  "worldFlags": [
-    "survivors_clinic_supplied"
-  ],
-  "npcMemories": [
-    {
-      "npcId": "elias",
-      "memoryType": "PLAYER_DONATED_MEDICINE",
-      "intensity": 7
-    }
-  ]
-}
+> Built as a production-style distributed game-state simulation engine demonstrating event-driven architecture with Kafka, TypeScript, PostgreSQL/TimescaleDB, Redis, and consequence-propagation systems inspired by Detroit: Become Human and Red Dead Redemption 2.
