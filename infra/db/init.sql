@@ -37,6 +37,31 @@ CREATE TABLE IF NOT EXISTS faction_relationships (
     PRIMARY KEY (source_faction_id, affected_faction_id)
 );
 
+CREATE TABLE IF NOT EXISTS npcs (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    faction_id TEXT REFERENCES factions(id) ON DELETE SET NULL,
+    description TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS npc_memory (
+    id BIGSERIAL PRIMARY KEY,
+    npc_id TEXT NOT NULL,
+    player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    memory_type TEXT NOT NULL,
+    description TEXT NOT NULL,
+    intensity INTEGER NOT NULL DEFAULT 5,
+    related_event_id TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_npc_memory_player_npc
+ON npc_memory (player_id, npc_id);
+
+CREATE INDEX IF NOT EXISTS idx_npc_memory_created_at
+ON npc_memory (created_at DESC);
+
 CREATE TABLE IF NOT EXISTS choice_events (
     event_id TEXT NOT NULL,
     occurred_at TIMESTAMPTZ NOT NULL,
@@ -119,3 +144,10 @@ VALUES
     ('order', 'raiders', 'hostile', -0.40),
     ('order', 'traders', 'neutral', 0.00)
 ON CONFLICT (source_faction_id, affected_faction_id) DO NOTHING;
+
+INSERT INTO npcs (id, name, faction_id, description)
+VALUES
+    ('elias', 'Elias', 'survivors', 'A Survivor doctor trying to keep Dusthaven Clinic alive.'),
+    ('mara', 'Mara', 'traders', 'A cautious Trader who controls access to scarce supplies.'),
+    ('knox', 'Knox', 'raiders', 'A Raider scout who remembers mercy and betrayal.')
+ON CONFLICT (id) DO NOTHING;

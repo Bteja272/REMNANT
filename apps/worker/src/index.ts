@@ -23,6 +23,15 @@ type ReputationUpdate = {
   reason: "DIRECT_ACTION" | "FACTION_RELATIONSHIP";
 };
 
+type NpcMemory = {
+  npcId: string;
+  playerId: string;
+  memoryType: string;
+  description: string;
+  intensity: number;
+  relatedEventId: string;
+};
+
 function normalizeFactionId(factionName?: string): string | null {
   if (!factionName) return null;
 
@@ -53,6 +62,69 @@ function getBaseReputationDelta(event: PlayerActionCreatedEvent): number {
       return 8;
     default:
       return 0;
+  }
+}
+
+function buildNpcMemory(event: PlayerActionCreatedEvent): NpcMemory | null {
+  if (!event.npcId) {
+    return null;
+  }
+
+  const npcId = event.npcId.toLowerCase();
+
+  switch (event.actionType) {
+    case "HELP_FACTION":
+      return {
+        npcId,
+        playerId: event.playerId,
+        memoryType: "HELPED_ALLIED_FACTION",
+        description: `Player helped ${event.targetFaction ?? "an allied faction"} near this NPC.`,
+        intensity: 6,
+        relatedEventId: event.eventId
+      };
+
+    case "DONATE_RESOURCE":
+      return {
+        npcId,
+        playerId: event.playerId,
+        memoryType: "DONATED_RESOURCE",
+        description: `Player donated ${event.metadata?.amount ?? "some"} ${event.metadata?.resource ?? "resources"}.`,
+        intensity: 7,
+        relatedEventId: event.eventId
+      };
+
+    case "ROB_NPC":
+      return {
+        npcId,
+        playerId: event.playerId,
+        memoryType: "ROBBED_BY_PLAYER",
+        description: "Player robbed this NPC during an encounter.",
+        intensity: 9,
+        relatedEventId: event.eventId
+      };
+
+    case "SPARE_ENEMY":
+      return {
+        npcId,
+        playerId: event.playerId,
+        memoryType: "SPARED_BY_PLAYER",
+        description: "Player spared this NPC instead of killing or capturing them.",
+        intensity: 8,
+        relatedEventId: event.eventId
+      };
+
+    case "ATTACK_FACTION":
+      return {
+        npcId,
+        playerId: event.playerId,
+        memoryType: "ATTACKED_FACTION",
+        description: `Player attacked ${event.targetFaction ?? "this NPC's faction"}.`,
+        intensity: 8,
+        relatedEventId: event.eventId
+      };
+
+    default:
+      return null;
   }
 }
 
@@ -173,9 +245,45 @@ async function applyReputationUpdates(
   }
 }
 
+async function saveNpcMemory(event: PlayerActionCreatedEvent): Promise<void> {
+  const memory = buildNpcMemory(event);
+
+  if (!memory) {
+    console.log("[worker] No NPC memory generated for this event.");
+    return;
+  }
+
+  await db.query(
+    `
+    INSERT INTO npc_memory (
+      npc_id,
+      player_id,
+      memory_type,
+      description,
+      intensity,
+      related_event_id
+    )
+    VALUES ($1, $2, $3, $4, $5, $6)
+    `,
+    [
+      memory.npcId,
+      memory.playerId,
+      memory.memoryType,
+      memory.description,
+      memory.intensity,
+      memory.relatedEventId
+    ]
+  );
+
+  console.log(
+    `[worker] NPC memory saved: npc=${memory.npcId}, player=${memory.playerId}, memory=${memory.memoryType}, intensity=${memory.intensity}`
+  );
+}
+
 async function processPlayerAction(event: PlayerActionCreatedEvent): Promise<void> {
   await saveChoiceEvent(event);
   await applyReputationUpdates(event);
+  await saveNpcMemory(event);
 }
 
 async function startWorker() {
@@ -251,7 +359,9 @@ async function startWorker() {
 
       try {
         await processPlayerAction(event);
-        console.log("[worker] Event persisted and cascading consequences applied\n");
+        console.log(
+          "[worker] Event persisted, cascading consequences applied, and NPC memory updated\n"
+        );
       } catch (error) {
         console.error("[worker] Failed to process event", {
           eventId: event.eventId,

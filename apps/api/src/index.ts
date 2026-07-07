@@ -209,6 +209,110 @@ app.get("/players/:playerId/state", async (request, reply) => {
   });
 });
 
+app.get("/npcs/:npcId/behavior", async (request, reply) => {
+  const { npcId } = request.params as { npcId: string };
+  const { playerId } = request.query as { playerId?: string };
+
+  if (!playerId) {
+    return reply.status(400).send({
+      error: "Missing required query parameter: playerId"
+    });
+  }
+
+  const npcResult = await db.query(
+    `
+    SELECT
+      n.id,
+      n.name,
+      n.faction_id,
+      f.name AS faction_name,
+      n.description
+    FROM npcs n
+    LEFT JOIN factions f
+      ON f.id = n.faction_id
+    WHERE n.id = $1
+    `,
+    [npcId.toLowerCase()]
+  );
+
+  if (npcResult.rowCount === 0) {
+    return reply.status(404).send({
+      error: "NPC not found",
+      npcId
+    });
+  }
+
+  const memoryResult = await db.query(
+    `
+    SELECT
+      id,
+      npc_id,
+      player_id,
+      memory_type,
+      description,
+      intensity,
+      related_event_id,
+      created_at
+    FROM npc_memory
+    WHERE npc_id = $1
+      AND player_id = $2
+    ORDER BY intensity DESC, created_at DESC
+    LIMIT 10
+    `,
+    [npcId.toLowerCase(), playerId]
+  );
+
+  const npc = npcResult.rows[0];
+  const memories = memoryResult.rows;
+
+  let behavior = "NEUTRAL";
+  let reason = "This NPC has no strong memory of the player yet.";
+
+  const strongestMemory = memories[0];
+
+  if (strongestMemory) {
+    switch (strongestMemory.memory_type) {
+      case "ROBBED_BY_PLAYER":
+        behavior = "LOCK_DOORS";
+        reason = "This NPC remembers being robbed by the player.";
+        break;
+
+      case "SPARED_BY_PLAYER":
+        behavior = "SHOWS_MERCY";
+        reason = "This NPC remembers that the player spared them.";
+        break;
+
+      case "DONATED_RESOURCE":
+        behavior = "OFFERS_HELP";
+        reason = "This NPC remembers that the player donated useful resources.";
+        break;
+
+      case "HELPED_ALLIED_FACTION":
+        behavior = "FRIENDLY";
+        reason = "This NPC remembers the player helping an allied faction.";
+        break;
+
+      case "ATTACKED_FACTION":
+        behavior = "HOSTILE";
+        reason = "This NPC remembers the player attacking their faction.";
+        break;
+
+      default:
+        behavior = "WATCHFUL";
+        reason = "This NPC remembers the player, but the memory is ambiguous.";
+        break;
+    }
+  }
+
+  return reply.status(200).send({
+    npc,
+    playerId,
+    behavior,
+    reason,
+    memories
+  });
+});
+
 async function start() {
   try {
     await db.query("SELECT 1");
