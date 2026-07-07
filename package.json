@@ -5,11 +5,13 @@
   "workspaces": [
     "apps/api",
     "apps/worker",
+    "apps/dashboard",
     "packages/shared"
   ],
   "scripts": {
     "build": "npm run build --workspaces",
     "dev:api": "npm run dev -w apps/api",
-    "dev:worker": "npm run dev -w apps/worker"
+    "dev:worker": "npm run dev -w apps/worker",
+    "dev:dashboard": "npm run dev -w apps/dashboard"
   }
 }

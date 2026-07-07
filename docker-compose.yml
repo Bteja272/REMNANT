@@ -94,6 +94,19 @@ services:
     volumes:
       - .:/app
     command: sh -c "npm install && npm run build -w packages/shared && npm run dev -w apps/worker"
+  
+  dashboard:
+    image: node:20-alpine
+    container_name: remnant-dashboard
+    working_dir: /app
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "5173:5173"
+    volumes:
+      - .:/app
+    command: sh -c "npm install && npm run dev -w apps/dashboard"
 
 volumes:
   remnant_postgres_data:
