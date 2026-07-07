@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import FactionWorldMap from "./components/FactionWorldMap";
 import {
   Bar,
   BarChart,
@@ -294,6 +295,12 @@ function App() {
       {error && <div className="error">{error}</div>}
 
       <section className="grid">
+        <section className="panel map-panel">
+        <FactionWorldMap
+            reputation={playerState?.reputation ?? []}
+            worldState={playerState?.worldState ?? []}
+        />
+        </section>
         <section className="panel actions-panel">
           <h2>Player Choices</h2>
           <p className="panel-subtitle">
