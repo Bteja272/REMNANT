@@ -1,5 +1,7 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import Redis from "ioredis";
+import { WebSocket, WebSocketServer } from "ws";
 import { Kafka, Producer } from "kafkajs";
 import { Pool } from "pg";
 import {
@@ -15,6 +17,8 @@ const KAFKA_BROKER = process.env.KAFKA_BROKER ?? "localhost:9092";
 const DATABASE_URL =
   process.env.DATABASE_URL ?? "postgres://remnant:remnant@localhost:5432/remnant";
 
+const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
+
 const app = Fastify({
   logger: true
 });
@@ -22,6 +26,10 @@ const app = Fastify({
 const db = new Pool({
   connectionString: DATABASE_URL
 });
+
+const redis = new Redis(REDIS_URL);
+
+let wss: WebSocketServer;
 
 let producer: Producer;
 
@@ -44,12 +52,15 @@ app.register(cors, {
 
 app.get("/health", async () => {
   await db.query("SELECT 1");
+  await redis.ping();
 
   return {
     status: "ok",
     service: "remnant-api",
     kafkaBroker: KAFKA_BROKER,
-    database: "connected"
+    database: "connected",
+    redis: "connected",
+    websocket: "enabled"
   };
 });
 
@@ -376,12 +387,118 @@ app.get("/world/state", async (_request, reply) => {
   });
 });
 
+function setupWebSocketServer() {
+  wss = new WebSocketServer({
+    server: app.server
+  });
+
+  wss.on("connection", async (socket, request) => {
+    const url = new URL(request.url ?? "", "http://localhost");
+    const match = url.pathname.match(/^\/ws\/players\/([^/]+)$/);
+
+    if (!match) {
+      socket.close(1008, "Invalid WebSocket path");
+      return;
+    }
+
+    const playerId = match[1];
+    const channel = `channel:${playerId}:updates`;
+    const subscriber = redis.duplicate();
+
+    console.log(`[ws] Client connected for player=${playerId}`);
+
+    socket.send(
+      JSON.stringify({
+        type: "CONNECTED",
+        playerId,
+        channel,
+        message: "WebSocket connection established"
+      })
+    );
+
+    try {
+      const [cachedReputation, cachedWorldState, latestEvents] =
+        await Promise.all([
+          redis.get(`player:${playerId}:reputation`),
+          redis.get(`player:${playerId}:world_state`),
+          redis.lrange(`player:${playerId}:latest_events`, 0, 24)
+        ]);
+
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(
+          JSON.stringify({
+            type: "INITIAL_STATE",
+            playerId,
+            reputation: cachedReputation ? JSON.parse(cachedReputation) : [],
+            worldState: cachedWorldState ? JSON.parse(cachedWorldState) : [],
+            latestEvents: latestEvents.map((event) => JSON.parse(event))
+          })
+        );
+      }
+
+      await subscriber.subscribe(channel);
+
+      subscriber.on("message", (receivedChannel, message) => {
+        if (receivedChannel !== channel) {
+          return;
+        }
+
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(message);
+        }
+      });
+    } catch (error) {
+      console.error("[ws] Failed to initialize WebSocket subscription", {
+        playerId,
+        error
+      });
+
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(
+          JSON.stringify({
+            type: "ERROR",
+            message: "Failed to initialize live updates"
+          })
+        );
+      }
+    }
+
+    socket.on("close", async () => {
+      console.log(`[ws] Client disconnected for player=${playerId}`);
+
+      try {
+        await subscriber.unsubscribe(channel);
+        await subscriber.quit();
+      } catch (error) {
+        console.error("[ws] Failed to clean up Redis subscriber", {
+          playerId,
+          error
+        });
+      }
+    });
+
+    socket.on("error", (error) => {
+      console.error("[ws] WebSocket error", {
+        playerId,
+        error
+      });
+    });
+  });
+
+  console.log("[ws] WebSocket server attached to Fastify HTTP server");
+}
+
 async function start() {
   try {
     await db.query("SELECT 1");
     app.log.info("PostgreSQL connection verified");
 
+    await redis.ping();
+    app.log.info("Redis connection verified");
+
     producer = await buildKafkaProducer();
+
+    setupWebSocketServer();
 
     await app.listen({
       port: PORT,
@@ -398,6 +515,8 @@ async function start() {
 process.on("SIGINT", async () => {
   app.log.info("Shutting down API");
   await producer?.disconnect();
+  await redis.quit();
+  wss?.close();
   await db.end();
   await app.close();
   process.exit(0);
