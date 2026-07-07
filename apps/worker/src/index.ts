@@ -17,6 +17,12 @@ const db = new Pool({
   connectionString: DATABASE_URL
 });
 
+type ReputationUpdate = {
+  factionId: string;
+  delta: number;
+  reason: "DIRECT_ACTION" | "FACTION_RELATIONSHIP";
+};
+
 function normalizeFactionId(factionName?: string): string | null {
   if (!factionName) return null;
 
@@ -33,7 +39,7 @@ function normalizeFactionId(factionName?: string): string | null {
   return knownFactions[normalized] ?? normalized.replace(/\s+/g, "_");
 }
 
-function getReputationDelta(event: PlayerActionCreatedEvent): number {
+function getBaseReputationDelta(event: PlayerActionCreatedEvent): number {
   switch (event.actionType) {
     case "HELP_FACTION":
       return 15;
@@ -77,18 +83,44 @@ async function saveChoiceEvent(event: PlayerActionCreatedEvent): Promise<void> {
   );
 }
 
-async function applyReputationUpdate(
-  event: PlayerActionCreatedEvent
+async function getRelationshipBasedUpdates(
+  sourceFactionId: string,
+  baseDelta: number
+): Promise<ReputationUpdate[]> {
+  const result = await db.query<{
+    affected_faction_id: string;
+    relationship_type: string;
+    influence_multiplier: string;
+  }>(
+    `
+    SELECT
+      affected_faction_id,
+      relationship_type,
+      influence_multiplier
+    FROM faction_relationships
+    WHERE source_faction_id = $1
+    `,
+    [sourceFactionId]
+  );
+
+  return result.rows
+    .map((row) => {
+      const multiplier = Number(row.influence_multiplier);
+      const delta = Math.round(baseDelta * multiplier);
+
+      return {
+        factionId: row.affected_faction_id,
+        delta,
+        reason: "FACTION_RELATIONSHIP" as const
+      };
+    })
+    .filter((update) => update.delta !== 0);
+}
+
+async function applySingleReputationUpdate(
+  playerId: string,
+  update: ReputationUpdate
 ): Promise<void> {
-  const factionId = normalizeFactionId(event.targetFaction);
-
-  if (!factionId) {
-    console.log("[worker] No target faction present. Skipping reputation update.");
-    return;
-  }
-
-  const delta = getReputationDelta(event);
-
   await db.query(
     `
     INSERT INTO player_faction_reputation (
@@ -103,17 +135,47 @@ async function applyReputationUpdate(
       reputation_score = player_faction_reputation.reputation_score + EXCLUDED.reputation_score,
       updated_at = NOW()
     `,
-    [event.playerId, factionId, delta]
+    [playerId, update.factionId, update.delta]
   );
 
   console.log(
-    `[worker] Reputation updated: player=${event.playerId}, faction=${factionId}, delta=${delta}`
+    `[worker] Reputation updated: player=${playerId}, faction=${update.factionId}, delta=${update.delta}, reason=${update.reason}`
   );
+}
+
+async function applyReputationUpdates(
+  event: PlayerActionCreatedEvent
+): Promise<void> {
+  const targetFactionId = normalizeFactionId(event.targetFaction);
+
+  if (!targetFactionId) {
+    console.log("[worker] No target faction present. Skipping reputation update.");
+    return;
+  }
+
+  const baseDelta = getBaseReputationDelta(event);
+
+  const directUpdate: ReputationUpdate = {
+    factionId: targetFactionId,
+    delta: baseDelta,
+    reason: "DIRECT_ACTION"
+  };
+
+  const relationshipUpdates = await getRelationshipBasedUpdates(
+    targetFactionId,
+    baseDelta
+  );
+
+  const allUpdates = [directUpdate, ...relationshipUpdates];
+
+  for (const update of allUpdates) {
+    await applySingleReputationUpdate(event.playerId, update);
+  }
 }
 
 async function processPlayerAction(event: PlayerActionCreatedEvent): Promise<void> {
   await saveChoiceEvent(event);
-  await applyReputationUpdate(event);
+  await applyReputationUpdates(event);
 }
 
 async function startWorker() {
@@ -189,7 +251,7 @@ async function startWorker() {
 
       try {
         await processPlayerAction(event);
-        console.log("[worker] Event persisted and consequences applied\n");
+        console.log("[worker] Event persisted and cascading consequences applied\n");
       } catch (error) {
         console.error("[worker] Failed to process event", {
           eventId: event.eventId,

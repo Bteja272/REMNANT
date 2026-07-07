@@ -29,6 +29,14 @@ CREATE TABLE IF NOT EXISTS player_faction_reputation (
     PRIMARY KEY (player_id, faction_id)
 );
 
+CREATE TABLE IF NOT EXISTS faction_relationships (
+    source_faction_id TEXT NOT NULL REFERENCES factions(id) ON DELETE CASCADE,
+    affected_faction_id TEXT NOT NULL REFERENCES factions(id) ON DELETE CASCADE,
+    relationship_type TEXT NOT NULL,
+    influence_multiplier NUMERIC(5, 2) NOT NULL DEFAULT 0,
+    PRIMARY KEY (source_faction_id, affected_faction_id)
+);
+
 CREATE TABLE IF NOT EXISTS choice_events (
     event_id TEXT NOT NULL,
     occurred_at TIMESTAMPTZ NOT NULL,
@@ -63,6 +71,30 @@ VALUES
     ('player_001', 'traders', 0),
     ('player_001', 'order', 0)
 ON CONFLICT (player_id, faction_id) DO NOTHING;
+
+INSERT INTO faction_relationships (
+    source_faction_id,
+    affected_faction_id,
+    relationship_type,
+    influence_multiplier
+)
+VALUES
+    ('survivors', 'raiders', 'hostile', -0.70),
+    ('survivors', 'traders', 'friendly', 0.20),
+    ('survivors', 'order', 'neutral', 0.00),
+
+    ('raiders', 'survivors', 'hostile', -0.70),
+    ('raiders', 'traders', 'hostile', -0.50),
+    ('raiders', 'order', 'hostile', -0.40),
+
+    ('traders', 'survivors', 'friendly', 0.20),
+    ('traders', 'raiders', 'hostile', -0.50),
+    ('traders', 'order', 'neutral', 0.00),
+
+    ('order', 'survivors', 'neutral', 0.00),
+    ('order', 'raiders', 'hostile', -0.40),
+    ('order', 'traders', 'neutral', 0.00)
+ON CONFLICT (source_faction_id, affected_faction_id) DO NOTHING;
 
 INSERT INTO faction_relationships (
     source_faction_id,
