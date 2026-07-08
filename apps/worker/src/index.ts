@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import Redis from "ioredis";
 import { Kafka } from "kafkajs";
 import { Pool } from "pg";
@@ -16,6 +17,10 @@ const DATABASE_URL =
 
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 
+const CONSEQUENCE_ENGINE_PATH =
+  process.env.CONSEQUENCE_ENGINE_PATH ??
+  "engines/consequence-cpp/build/remnant_consequence_engine";
+
 const db = new Pool({
   connectionString: DATABASE_URL
 });
@@ -28,24 +33,27 @@ type ReputationUpdate = {
   reason: "DIRECT_ACTION" | "FACTION_RELATIONSHIP";
 };
 
-type NpcMemory = {
-  npcId: string;
-  playerId: string;
+type CppNpcMemory = {
   memoryType: string;
   description: string;
   intensity: number;
-  relatedEventId: string;
 };
 
-type WorldStateFlag = {
-  playerId: string;
+type CppWorldFlag = {
   flagKey: string;
   flagValue: boolean;
   description: string;
-  sourceEventId: string;
+};
+
+type ConsequencePlan = {
+  engine: "cpp" | "typescript-fallback";
+  directReputationDelta: number;
+  npcMemory: CppNpcMemory | null;
+  worldFlags: CppWorldFlag[];
 };
 
 type ProcessResult = {
+  engine: "cpp" | "typescript-fallback";
   reputationUpdated: boolean;
   npcMemoryUpdated: boolean;
   worldStateUpdated: boolean;
@@ -67,7 +75,9 @@ function normalizeFactionId(factionName?: string): string | null {
   return knownFactions[normalized] ?? normalized.replace(/\s+/g, "_");
 }
 
-function getBaseReputationDelta(event: PlayerActionCreatedEvent): number {
+function getFallbackBaseReputationDelta(
+  event: PlayerActionCreatedEvent
+): number {
   switch (event.actionType) {
     case "HELP_FACTION":
       return 15;
@@ -84,62 +94,54 @@ function getBaseReputationDelta(event: PlayerActionCreatedEvent): number {
   }
 }
 
-function buildNpcMemory(event: PlayerActionCreatedEvent): NpcMemory | null {
+function buildFallbackNpcMemory(
+  event: PlayerActionCreatedEvent
+): CppNpcMemory | null {
   if (!event.npcId) {
     return null;
   }
 
-  const npcId = event.npcId.toLowerCase();
-
   switch (event.actionType) {
     case "HELP_FACTION":
       return {
-        npcId,
-        playerId: event.playerId,
         memoryType: "HELPED_ALLIED_FACTION",
-        description: `Player helped ${event.targetFaction ?? "an allied faction"} near this NPC.`,
-        intensity: 6,
-        relatedEventId: event.eventId
+        description: `Player helped ${
+          event.targetFaction ?? "an allied faction"
+        } near this NPC.`,
+        intensity: 6
       };
 
     case "DONATE_RESOURCE":
       return {
-        npcId,
-        playerId: event.playerId,
         memoryType: "DONATED_RESOURCE",
-        description: `Player donated ${event.metadata?.amount ?? "some"} ${event.metadata?.resource ?? "resources"}.`,
-        intensity: 7,
-        relatedEventId: event.eventId
+        description: `Player donated ${
+          event.metadata?.amount ?? "some"
+        } ${event.metadata?.resource ?? "resources"}.`,
+        intensity: 7
       };
 
     case "ROB_NPC":
       return {
-        npcId,
-        playerId: event.playerId,
         memoryType: "ROBBED_BY_PLAYER",
         description: "Player robbed this NPC during an encounter.",
-        intensity: 9,
-        relatedEventId: event.eventId
+        intensity: 9
       };
 
     case "SPARE_ENEMY":
       return {
-        npcId,
-        playerId: event.playerId,
         memoryType: "SPARED_BY_PLAYER",
-        description: "Player spared this NPC instead of killing or capturing them.",
-        intensity: 8,
-        relatedEventId: event.eventId
+        description:
+          "Player spared this NPC instead of killing or capturing them.",
+        intensity: 8
       };
 
     case "ATTACK_FACTION":
       return {
-        npcId,
-        playerId: event.playerId,
         memoryType: "ATTACKED_FACTION",
-        description: `Player attacked ${event.targetFaction ?? "this NPC's faction"}.`,
-        intensity: 8,
-        relatedEventId: event.eventId
+        description: `Player attacked ${
+          event.targetFaction ?? "this NPC's faction"
+        }.`,
+        intensity: 8
       };
 
     default:
@@ -147,12 +149,14 @@ function buildNpcMemory(event: PlayerActionCreatedEvent): NpcMemory | null {
   }
 }
 
-function buildWorldStateFlags(event: PlayerActionCreatedEvent): WorldStateFlag[] {
+function buildFallbackWorldFlags(
+  event: PlayerActionCreatedEvent
+): CppWorldFlag[] {
   const targetFactionId = normalizeFactionId(event.targetFaction);
   const npcId = event.npcId?.toLowerCase();
   const resource = event.metadata?.resource?.toLowerCase();
 
-  const flags: WorldStateFlag[] = [];
+  const flags: CppWorldFlag[] = [];
 
   if (
     event.actionType === "DONATE_RESOURCE" &&
@@ -160,48 +164,145 @@ function buildWorldStateFlags(event: PlayerActionCreatedEvent): WorldStateFlag[]
     resource === "medicine"
   ) {
     flags.push({
-      playerId: event.playerId,
       flagKey: "survivors_clinic_supplied",
       flagValue: true,
       description:
-        "Dusthaven Clinic has enough medicine because the player donated supplies to the Survivors.",
-      sourceEventId: event.eventId
+        "Dusthaven Clinic has enough medicine because the player donated supplies to the Survivors."
     });
   }
 
   if (event.actionType === "ROB_NPC" && npcId === "mara") {
     flags.push({
-      playerId: event.playerId,
       flagKey: "trader_market_unstable",
       flagValue: true,
-      description: "Mara's trade post is unstable after the player robbed her.",
-      sourceEventId: event.eventId
+      description: "Mara's trade post is unstable after the player robbed her."
     });
   }
 
   if (event.actionType === "SPARE_ENEMY" && npcId === "knox") {
     flags.push({
-      playerId: event.playerId,
       flagKey: "raider_checkpoint_ambush_disabled",
       flagValue: true,
       description:
-        "Knox remembers being spared, reducing the chance of a Raider checkpoint ambush.",
-      sourceEventId: event.eventId
+        "Knox remembers being spared, reducing the chance of a Raider checkpoint ambush."
     });
   }
 
   if (event.actionType === "ATTACK_FACTION" && targetFactionId === "raiders") {
     flags.push({
-      playerId: event.playerId,
       flagKey: "raider_checkpoint_hostile",
       flagValue: true,
       description:
-        "The Raider checkpoint has become hostile after the player attacked Raiders.",
-      sourceEventId: event.eventId
+        "The Raider checkpoint has become hostile after the player attacked Raiders."
     });
   }
 
   return flags;
+}
+
+function buildFallbackConsequencePlan(
+  event: PlayerActionCreatedEvent
+): ConsequencePlan {
+  return {
+    engine: "typescript-fallback",
+    directReputationDelta: getFallbackBaseReputationDelta(event),
+    npcMemory: buildFallbackNpcMemory(event),
+    worldFlags: buildFallbackWorldFlags(event)
+  };
+}
+
+function parseCppConsequencePlan(output: string): ConsequencePlan {
+  const parsed = JSON.parse(output) as {
+    engine?: string;
+    directReputationDelta?: number;
+    npcMemory?: CppNpcMemory | null;
+    worldFlags?: CppWorldFlag[];
+  };
+
+  if (typeof parsed.directReputationDelta !== "number") {
+    throw new Error("C++ engine response missing directReputationDelta");
+  }
+
+  return {
+    engine: "cpp",
+    directReputationDelta: parsed.directReputationDelta,
+    npcMemory: parsed.npcMemory ?? null,
+    worldFlags: parsed.worldFlags ?? []
+  };
+}
+
+async function runCppConsequenceEngine(
+  event: PlayerActionCreatedEvent
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(CONSEQUENCE_ENGINE_PATH, [], {
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("C++ consequence engine timed out"));
+    }, 3000);
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+
+    child.on("close", (code) => {
+      clearTimeout(timeout);
+
+      if (code !== 0) {
+        reject(
+          new Error(
+            `C++ consequence engine exited with code ${code}. stderr=${stderr}`
+          )
+        );
+        return;
+      }
+
+      resolve(stdout);
+    });
+
+    child.stdin.write(JSON.stringify(event));
+    child.stdin.end();
+  });
+}
+
+async function buildConsequencePlan(
+  event: PlayerActionCreatedEvent
+): Promise<ConsequencePlan> {
+  try {
+    const stdout = await runCppConsequenceEngine(event);
+    const plan = parseCppConsequencePlan(stdout);
+
+    console.log(
+      `[worker] C++ consequence engine succeeded: event=${event.eventId}, delta=${plan.directReputationDelta}`
+    );
+
+    return plan;
+  } catch (error) {
+    console.error(
+      "[worker] C++ consequence engine failed. Falling back to TypeScript rules.",
+      {
+        eventId: event.eventId,
+        error
+      }
+    );
+
+    return buildFallbackConsequencePlan(event);
+  }
 }
 
 async function saveChoiceEvent(event: PlayerActionCreatedEvent): Promise<void> {
@@ -292,7 +393,8 @@ async function applySingleReputationUpdate(
 }
 
 async function applyReputationUpdates(
-  event: PlayerActionCreatedEvent
+  event: PlayerActionCreatedEvent,
+  directReputationDelta: number
 ): Promise<boolean> {
   const targetFactionId = normalizeFactionId(event.targetFaction);
 
@@ -301,17 +403,15 @@ async function applyReputationUpdates(
     return false;
   }
 
-  const baseDelta = getBaseReputationDelta(event);
-
   const directUpdate: ReputationUpdate = {
     factionId: targetFactionId,
-    delta: baseDelta,
+    delta: directReputationDelta,
     reason: "DIRECT_ACTION"
   };
 
   const relationshipUpdates = await getRelationshipBasedUpdates(
     targetFactionId,
-    baseDelta
+    directReputationDelta
   );
 
   const allUpdates = [directUpdate, ...relationshipUpdates];
@@ -323,13 +423,16 @@ async function applyReputationUpdates(
   return allUpdates.length > 0;
 }
 
-async function saveNpcMemory(event: PlayerActionCreatedEvent): Promise<boolean> {
-  const memory = buildNpcMemory(event);
-
-  if (!memory) {
+async function saveNpcMemory(
+  event: PlayerActionCreatedEvent,
+  memory: CppNpcMemory | null
+): Promise<boolean> {
+  if (!memory || !event.npcId) {
     console.log("[worker] No NPC memory generated for this event.");
     return false;
   }
+
+  const npcId = event.npcId.toLowerCase();
 
   await db.query(
     `
@@ -344,27 +447,26 @@ async function saveNpcMemory(event: PlayerActionCreatedEvent): Promise<boolean> 
     VALUES ($1, $2, $3, $4, $5, $6)
     `,
     [
-      memory.npcId,
-      memory.playerId,
+      npcId,
+      event.playerId,
       memory.memoryType,
       memory.description,
       memory.intensity,
-      memory.relatedEventId
+      event.eventId
     ]
   );
 
   console.log(
-    `[worker] NPC memory saved: npc=${memory.npcId}, player=${memory.playerId}, memory=${memory.memoryType}, intensity=${memory.intensity}`
+    `[worker] NPC memory saved: npc=${npcId}, player=${event.playerId}, memory=${memory.memoryType}, intensity=${memory.intensity}`
   );
 
   return true;
 }
 
 async function saveWorldStateFlags(
-  event: PlayerActionCreatedEvent
+  event: PlayerActionCreatedEvent,
+  flags: CppWorldFlag[]
 ): Promise<boolean> {
-  const flags = buildWorldStateFlags(event);
-
   if (flags.length === 0) {
     console.log("[worker] No world state flags generated for this event.");
     return false;
@@ -390,16 +492,16 @@ async function saveWorldStateFlags(
         updated_at = NOW()
       `,
       [
-        flag.playerId,
+        event.playerId,
         flag.flagKey,
         flag.flagValue,
         flag.description,
-        flag.sourceEventId
+        event.eventId
       ]
     );
 
     console.log(
-      `[worker] World state flag updated: player=${flag.playerId}, flag=${flag.flagKey}, value=${flag.flagValue}`
+      `[worker] World state flag updated: player=${event.playerId}, flag=${flag.flagKey}, value=${flag.flagValue}`
     );
   }
 
@@ -494,6 +596,7 @@ async function publishRedisUpdate(
     actionType: event.actionType,
     targetFaction: event.targetFaction ?? null,
     npcId: event.npcId ?? null,
+    engine: result.engine,
     reputationUpdated: result.reputationUpdated,
     npcMemoryUpdated: result.npcMemoryUpdated,
     worldStateUpdated: result.worldStateUpdated,
@@ -520,11 +623,22 @@ async function processPlayerAction(
 ): Promise<ProcessResult> {
   await saveChoiceEvent(event);
 
-  const reputationUpdated = await applyReputationUpdates(event);
-  const npcMemoryUpdated = await saveNpcMemory(event);
-  const worldStateUpdated = await saveWorldStateFlags(event);
+  const consequencePlan = await buildConsequencePlan(event);
+
+  const reputationUpdated = await applyReputationUpdates(
+    event,
+    consequencePlan.directReputationDelta
+  );
+
+  const npcMemoryUpdated = await saveNpcMemory(event, consequencePlan.npcMemory);
+
+  const worldStateUpdated = await saveWorldStateFlags(
+    event,
+    consequencePlan.worldFlags
+  );
 
   const result: ProcessResult = {
+    engine: consequencePlan.engine,
     reputationUpdated,
     npcMemoryUpdated,
     worldStateUpdated
@@ -554,6 +668,7 @@ async function startWorker() {
   await consumer.connect();
 
   console.log(`[worker] Connected to Kafka broker: ${KAFKA_BROKER}`);
+  console.log(`[worker] Consequence engine path: ${CONSEQUENCE_ENGINE_PATH}`);
 
   await consumer.subscribe({
     topic: PLAYER_ACTION_CREATED_TOPIC,
