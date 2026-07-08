@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: "REMNANT Dashboards"
+    orgId: 1
+    folder: "REMNANT"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    options:
+      path: /var/lib/grafana/dashboards

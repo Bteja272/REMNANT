@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: "remnant-api"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["api:3000"]
+
+  - job_name: "remnant-worker"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["worker:9101"]

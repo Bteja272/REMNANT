@@ -1,13 +1,16 @@
 import { spawn } from "node:child_process";
+import http from "node:http";
 import Redis from "ioredis";
 import { Kafka } from "kafkajs";
 import { Pool } from "pg";
+import client from "prom-client";
 import {
   PLAYER_ACTION_CREATED_TOPIC,
   PlayerActionCreatedEvent,
   PlayerActionCreatedEventSchema
 } from "@remnant/shared";
 
+const WORKER_METRICS_PORT = Number(process.env.WORKER_METRICS_PORT ?? 9101);
 const KAFKA_BROKER = process.env.KAFKA_BROKER ?? "localhost:9092";
 const CONSUMER_GROUP_ID =
   process.env.CONSUMER_GROUP_ID ?? "remnant-consequence-worker";
@@ -26,6 +29,39 @@ const db = new Pool({
 });
 
 const redis = new Redis(REDIS_URL);
+
+/**
+ * Prometheus metrics registry for the worker.
+ * Exposed at GET /metrics on WORKER_METRICS_PORT.
+ */
+const workerMetricsRegister = new client.Registry();
+
+client.collectDefaultMetrics({
+  register: workerMetricsRegister,
+  prefix: "remnant_worker_"
+});
+
+const workerEventsProcessedTotal = new client.Counter({
+  name: "remnant_worker_events_processed_total",
+  help: "Total Kafka player action events processed by the worker",
+  labelNames: ["action_type", "engine", "status"],
+  registers: [workerMetricsRegister]
+});
+
+const workerConsequenceEngineTotal = new client.Counter({
+  name: "remnant_worker_consequence_engine_total",
+  help: "Total consequence engine executions by engine type",
+  labelNames: ["engine", "status"],
+  registers: [workerMetricsRegister]
+});
+
+const workerProcessingDurationSeconds = new client.Histogram({
+  name: "remnant_worker_processing_duration_seconds",
+  help: "Time spent processing player action events",
+  labelNames: ["action_type", "engine"],
+  buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5],
+  registers: [workerMetricsRegister]
+});
 
 type ReputationUpdate = {
   factionId: string;
@@ -287,12 +323,22 @@ async function buildConsequencePlan(
     const stdout = await runCppConsequenceEngine(event);
     const plan = parseCppConsequencePlan(stdout);
 
+    workerConsequenceEngineTotal.inc({
+      engine: "cpp",
+      status: "success"
+    });
+
     console.log(
       `[worker] C++ consequence engine succeeded: event=${event.eventId}, delta=${plan.directReputationDelta}`
     );
 
     return plan;
   } catch (error) {
+    workerConsequenceEngineTotal.inc({
+      engine: "typescript-fallback",
+      status: "used"
+    });
+
     console.error(
       "[worker] C++ consequence engine failed. Falling back to TypeScript rules.",
       {
@@ -621,32 +667,87 @@ async function refreshRedisActiveState(
 async function processPlayerAction(
   event: PlayerActionCreatedEvent
 ): Promise<ProcessResult> {
-  await saveChoiceEvent(event);
+  const startTime = process.hrtime.bigint();
 
-  const consequencePlan = await buildConsequencePlan(event);
+  let result: ProcessResult | null = null;
 
-  const reputationUpdated = await applyReputationUpdates(
-    event,
-    consequencePlan.directReputationDelta
-  );
+  try {
+    await saveChoiceEvent(event);
 
-  const npcMemoryUpdated = await saveNpcMemory(event, consequencePlan.npcMemory);
+    const consequencePlan = await buildConsequencePlan(event);
 
-  const worldStateUpdated = await saveWorldStateFlags(
-    event,
-    consequencePlan.worldFlags
-  );
+    const reputationUpdated = await applyReputationUpdates(
+      event,
+      consequencePlan.directReputationDelta
+    );
 
-  const result: ProcessResult = {
-    engine: consequencePlan.engine,
-    reputationUpdated,
-    npcMemoryUpdated,
-    worldStateUpdated
-  };
+    const npcMemoryUpdated = await saveNpcMemory(
+      event,
+      consequencePlan.npcMemory
+    );
 
-  await refreshRedisActiveState(event, result);
+    const worldStateUpdated = await saveWorldStateFlags(
+      event,
+      consequencePlan.worldFlags
+    );
 
-  return result;
+    result = {
+      engine: consequencePlan.engine,
+      reputationUpdated,
+      npcMemoryUpdated,
+      worldStateUpdated
+    };
+
+    await refreshRedisActiveState(event, result);
+
+    workerEventsProcessedTotal.inc({
+      action_type: event.actionType,
+      engine: result.engine,
+      status: "success"
+    });
+
+    return result;
+  } catch (error) {
+    workerEventsProcessedTotal.inc({
+      action_type: event.actionType,
+      engine: result?.engine ?? "unknown",
+      status: "failure"
+    });
+
+    throw error;
+  } finally {
+    const endTime = process.hrtime.bigint();
+    const durationSeconds = Number(endTime - startTime) / 1_000_000_000;
+
+    workerProcessingDurationSeconds.observe(
+      {
+        action_type: event.actionType,
+        engine: result?.engine ?? "unknown"
+      },
+      durationSeconds
+    );
+  }
+}
+
+function startWorkerMetricsServer() {
+  const server = http.createServer(async (request, response) => {
+    if (request.url !== "/metrics") {
+      response.statusCode = 404;
+      response.end("Not found");
+      return;
+    }
+
+    response.setHeader("Content-Type", workerMetricsRegister.contentType);
+    response.end(await workerMetricsRegister.metrics());
+  });
+
+  server.listen(WORKER_METRICS_PORT, "0.0.0.0", () => {
+    console.log(
+      `[worker] Metrics server listening on http://0.0.0.0:${WORKER_METRICS_PORT}/metrics`
+    );
+  });
+
+  return server;
 }
 
 async function startWorker() {
@@ -655,6 +756,8 @@ async function startWorker() {
 
   await redis.ping();
   console.log("[worker] Connected to Redis");
+
+  startWorkerMetricsServer();
 
   const kafka = new Kafka({
     clientId: "remnant-worker",

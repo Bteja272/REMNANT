@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import Redis from "ioredis";
+import client from "prom-client";
 import { WebSocket, WebSocketServer } from "ws";
 import { Kafka, Producer } from "kafkajs";
 import { Pool } from "pg";
@@ -30,8 +31,39 @@ const db = new Pool({
 const redis = new Redis(REDIS_URL);
 
 let wss: WebSocketServer;
-
 let producer: Producer;
+
+/**
+ * Prometheus metrics registry for the API.
+ * These metrics are exposed at GET /metrics and scraped by Prometheus.
+ */
+const metricsRegister = new client.Registry();
+
+client.collectDefaultMetrics({
+  register: metricsRegister,
+  prefix: "remnant_api_"
+});
+
+const apiHttpRequestsTotal = new client.Counter({
+  name: "remnant_api_http_requests_total",
+  help: "Total HTTP requests received by the REMNANT API",
+  labelNames: ["method", "route", "status_code"],
+  registers: [metricsRegister]
+});
+
+const apiActionsSubmittedTotal = new client.Counter({
+  name: "remnant_api_actions_submitted_total",
+  help: "Total committed player actions submitted to the API",
+  labelNames: ["action_type", "result"],
+  registers: [metricsRegister]
+});
+
+const apiActionPreviewsTotal = new client.Counter({
+  name: "remnant_api_action_previews_total",
+  help: "Total consequence preview requests submitted to the API",
+  labelNames: ["action_type", "result"],
+  registers: [metricsRegister]
+});
 
 async function buildKafkaProducer(): Promise<Producer> {
   const kafka = new Kafka({
@@ -50,6 +82,25 @@ app.register(cors, {
   origin: true
 });
 
+/**
+ * Tracks all API HTTP responses by method, route, and status code.
+ */
+app.addHook("onResponse", async (request, reply) => {
+  apiHttpRequestsTotal.inc({
+    method: request.method,
+    route: request.routeOptions.url ?? request.url,
+    status_code: String(reply.statusCode)
+  });
+});
+
+/**
+ * Prometheus scrape endpoint.
+ */
+app.get("/metrics", async (_request, reply) => {
+  reply.header("Content-Type", metricsRegister.contentType);
+  return metricsRegister.metrics();
+});
+
 app.get("/health", async () => {
   await db.query("SELECT 1");
   await redis.ping();
@@ -60,7 +111,8 @@ app.get("/health", async () => {
     kafkaBroker: KAFKA_BROKER,
     database: "connected",
     redis: "connected",
-    websocket: "enabled"
+    websocket: "enabled",
+    metrics: "enabled"
   };
 });
 
@@ -137,7 +189,9 @@ function buildNpcMemoryPreview(action: {
       return {
         npcId,
         memoryType: "HELPED_ALLIED_FACTION",
-        description: `NPC may remember that the player helped ${action.targetFaction ?? "an allied faction"}.`,
+        description: `NPC may remember that the player helped ${
+          action.targetFaction ?? "an allied faction"
+        }.`,
         intensity: 6
       };
 
@@ -145,7 +199,9 @@ function buildNpcMemoryPreview(action: {
       return {
         npcId,
         memoryType: "DONATED_RESOURCE",
-        description: `NPC may remember that the player donated ${action.metadata?.amount ?? "some"} ${action.metadata?.resource ?? "resources"}.`,
+        description: `NPC may remember that the player donated ${
+          action.metadata?.amount ?? "some"
+        } ${action.metadata?.resource ?? "resources"}.`,
         intensity: 7
       };
 
@@ -169,7 +225,9 @@ function buildNpcMemoryPreview(action: {
       return {
         npcId,
         memoryType: "ATTACKED_FACTION",
-        description: `NPC may remember that the player attacked ${action.targetFaction ?? "their faction"}.`,
+        description: `NPC may remember that the player attacked ${
+          action.targetFaction ?? "their faction"
+        }.`,
         intensity: 8
       };
 
@@ -212,7 +270,8 @@ function buildWorldFlagPreviews(action: {
     flags.push({
       flagKey: "trader_market_unstable",
       flagValue: true,
-      description: "Mara's trade post may become unstable if the player robs her."
+      description:
+        "Mara's trade post may become unstable if the player robs her."
     });
   }
 
@@ -302,11 +361,15 @@ async function buildReputationPreview(action: {
   return [directUpdate, ...relationshipUpdates];
 }
 
-
 app.post("/actions/preview", async (request, reply) => {
   const parsed = CreatePlayerActionRequestSchema.safeParse(request.body);
 
   if (!parsed.success) {
+    apiActionPreviewsTotal.inc({
+      action_type: "invalid",
+      result: "rejected"
+    });
+
     return reply.status(400).send({
       error: "Invalid player action preview request",
       details: parsed.error.flatten()
@@ -334,6 +397,11 @@ app.post("/actions/preview", async (request, reply) => {
     metadata: action.metadata
   });
 
+  apiActionPreviewsTotal.inc({
+    action_type: action.actionType,
+    result: "success"
+  });
+
   return reply.status(200).send({
     playerId: action.playerId,
     actionType: action.actionType,
@@ -346,11 +414,15 @@ app.post("/actions/preview", async (request, reply) => {
   });
 });
 
-
 app.post("/actions", async (request, reply) => {
   const parsed = CreatePlayerActionRequestSchema.safeParse(request.body);
 
   if (!parsed.success) {
+    apiActionsSubmittedTotal.inc({
+      action_type: "invalid",
+      result: "rejected"
+    });
+
     return reply.status(400).send({
       error: "Invalid player action request",
       details: parsed.error.flatten()
@@ -375,12 +447,22 @@ app.post("/actions", async (request, reply) => {
       ]
     });
 
+    apiActionsSubmittedTotal.inc({
+      action_type: event.actionType,
+      result: "accepted"
+    });
+
     return reply.status(200).send({
       status: "accepted",
       eventType: event.eventType,
       eventId: event.eventId
     });
   } catch (error) {
+    apiActionsSubmittedTotal.inc({
+      action_type: event.actionType,
+      result: "publish_failed"
+    });
+
     app.log.error(error, "Failed to publish player action event");
 
     return reply.status(503).send({
@@ -496,7 +578,7 @@ app.get("/players/:playerId/state", async (request, reply) => {
     [playerId]
   );
 
-    const worldStateResult = await db.query(
+  const worldStateResult = await db.query(
     `
     SELECT
       flag_key,
@@ -622,7 +704,6 @@ app.get("/npcs/:npcId/behavior", async (request, reply) => {
     memories
   });
 });
-
 
 app.get("/players/:playerId/world-state", async (request, reply) => {
   const { playerId } = request.params as { playerId: string };

@@ -92,9 +92,12 @@ services:
       DATABASE_URL: postgres://remnant:remnant@remnant-postgres:5432/remnant
       REDIS_URL: redis://remnant-redis:6379
       CONSEQUENCE_ENGINE_PATH: /app/engines/consequence-cpp/build/remnant_consequence_engine
+      WORKER_METRICS_PORT: 9101
       # CONSEQUENCE_ENGINE_PATH: /app/engines/consequence-cpp/build/missing_engine
     volumes:
       - .:/app
+    ports:
+      - "9101:9101"
     command: >
       sh -c "
         apk add --no-cache g++ &&
@@ -117,6 +120,37 @@ services:
     volumes:
       - .:/app
     command: sh -c "npm install && npm run dev -w apps/dashboard"
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: remnant-prometheus
+    depends_on:
+      api:
+        condition: service_started
+      worker:
+        condition: service_started
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+
+  grafana:
+    image: grafana/grafana:11.1.4
+    container_name: remnant-grafana
+    depends_on:
+      prometheus:
+        condition: service_started
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards
 
 volumes:
   remnant_postgres_data:
