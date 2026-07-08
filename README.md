@@ -3,87 +3,127 @@
 
 [![CI](https://github.com/Bteja272/remnant/actions/workflows/ci.yml/badge.svg)](https://github.com/Bteja272/remnant/actions)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.0%2B-3178C6?style=flat&logo=typescript&logoColor=white)
+![C++](https://img.shields.io/badge/C%2B%2B-Consequence_Engine-00599C?style=flat&logo=cplusplus&logoColor=white)
 ![Kafka](https://img.shields.io/badge/Kafka-Event_Streaming-231F20?style=flat&logo=apachekafka&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-TimescaleDB-336791?style=flat&logo=postgresql&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-Cache_%2B_PubSub-DC382D?style=flat&logo=redis&logoColor=white)
+![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-E6522C?style=flat&logo=prometheus&logoColor=white)
 ![React](https://img.shields.io/badge/React-TypeScript_Dashboard-61DAFB?style=flat&logo=react&logoColor=black)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat)
 
-> You donate medicine to Elias. A Kafka event fires. The consequence worker propagates reputation changes across four factions. Elias stores a memory. A world-state flag flips. Redis refreshes. A WebSocket pushes the update. The map changes. All in under a second.
+> You donate medicine to Elias. A Kafka event fires. The TypeScript worker calls the **C++ consequence engine**. Faction reputations propagate. Elias stores a memory. A world flag flips. PostgreSQL commits. Redis refreshes. A WebSocket pushes the update. Prometheus records it. The map changes.
 >
-> That is REMNANT.
+> All in under a second.
 
 ---
 
 ## What Is This
 
-REMNANT is a **distributed game-state simulation engine** — not a static mockup, not a CRUD app. Every player choice is a real backend event that flows through Kafka, gets processed asynchronously, and ripples across faction reputations, NPC memory, and world-state flags before being pushed live to a playable React dashboard.
+REMNANT is a **distributed game-state simulation engine** — not a static mockup, not a CRUD app.
 
-The consequence system is inspired by **Detroit: Become Human** and **Red Dead Redemption 2** — worlds where your decisions permanently shape who trusts you, who fears you, and what the world looks like when you come back.
+The architecture uses **TypeScript for service orchestration** and a **C++ consequence engine for game-state simulation** — a hybrid pattern used in production game backends where performance-critical logic is separated from service coordination.
 
-**Try it in 60 seconds:**
-```bash
-docker compose up --build
-# open http://localhost:5173
-# click "Give medicine to Elias"
-# watch the world change
+Every player choice flows through the full pipeline:
+
 ```
+React Dashboard
+     ↓  POST /actions
+Fastify TypeScript API
+     ↓  Kafka: player.action.created
+TypeScript Consequence Worker
+     ↓  child_process JSON IPC
+C++ Consequence Engine          ← if engine fails → TypeScript fallback
+     ↓
+PostgreSQL / TimescaleDB        ← durable state
+Redis Cache + Pub/Sub           ← active state + live push
+     ↓  WebSocket
+React Live Dashboard
+```
+
+Prometheus metrics are instrumented on both the API and worker — tracking request volume, C++ engine usage, fallback frequency, and processing latency.
 
 ---
 
-## The Full Pipeline
+## The C++ Engine
 
+The consequence engine lives at `engines/consequence-cpp/src/main.cpp`.
+
+The TypeScript worker calls it via Node's `child_process` API, passing the player action event as JSON:
+
+**Input:**
+```json
+{
+  "actionType": "DONATE_RESOURCE",
+  "targetFaction": "Survivors",
+  "npcId": "elias",
+  "currentReputation": { "survivors": 20, "raiders": -10, "traders": 5, "order": 0 },
+  "metadata": { "resource": "medicine", "amount": 2 }
+}
 ```
-React Playable Scenario
-        ↓  POST /actions
-Fastify TypeScript API  ←→  WebSocket /ws/players/:id
-        ↓  Kafka: player.action.created
-TypeScript Consequence Worker
-        ↓
-┌───────────────────────────────────┐
-│  Faction Reputation Propagation   │
-│  NPC Memory Creation              │
-│  World-State Flag Updates         │
-└───────────────────────────────────┘
-        ↓                    ↓
-PostgreSQL/TimescaleDB    Redis Cache + Pub/Sub
-(durable history)         (active state + live push)
-        ↓
-WebSocket → React Dashboard updates live
+
+**Output:**
+```json
+{
+  "engine": "cpp",
+  "directReputationDelta": 10,
+  "npcMemory": {
+    "memoryType": "DONATED_RESOURCE",
+    "description": "Player donated medicine.",
+    "intensity": 7
+  },
+  "worldFlags": [
+    {
+      "flagKey": "survivors_clinic_supplied",
+      "flagValue": true,
+      "description": "Dusthaven Clinic has medicine because the player donated to Survivors."
+    }
+  ]
+}
 ```
+
+**If the C++ engine fails, times out, or returns malformed output, the worker automatically falls back to TypeScript consequence logic** — the pipeline never stops processing because of a simulation-layer failure.
 
 ---
 
 ## One Choice. Many Consequences.
 
 ```
-Player donates medicine to Elias (Survivors)
-        ↓
-Survivors reputation   +15
-Raiders reputation     -11  ← faction relationship propagation
-Traders reputation     +3   ← faction relationship propagation
-Elias memory           DONATED_RESOURCE → behavior: OFFERS_HELP
-World flag             survivors_clinic_supplied = true
-Redis cache            refreshed
-WebSocket              PLAYER_STATE_UPDATED pushed
-SVG map                Survivors territory strengthens
+Player donates medicine to Elias
+     ↓
+C++ engine calculates direct delta:    Survivors +10
+Worker propagates faction relations:   Raiders   -7  (hostile to Survivors)
+                                       Traders   +3  (allied with Survivors)
+Elias memory:                          DONATED_RESOURCE → behavior: OFFERS_HELP
+World flag:                            survivors_clinic_supplied = true
+Redis cache:                           refreshed
+WebSocket:                             PLAYER_STATE_UPDATED pushed
+Prometheus:                            remnant_worker_consequence_engine_total +1
 ```
 
-Rob Mara the next day:
+---
+
+## Observability
+
+Both the API and worker expose Prometheus-compatible `/metrics` endpoints.
+
+**API metrics:**
 ```
-Traders reputation     -20
-Mara memory            ROBBED_BY_PLAYER → behavior: LOCK_DOORS
-World flag             trader_market_unstable = true
+remnant_api_http_requests_total
+remnant_api_actions_submitted_total
+remnant_api_action_previews_total
 ```
 
-Spare Knox the Raider:
+**Worker metrics:**
 ```
-Raiders reputation     shifts
-Knox memory            SPARED_BY_PLAYER → behavior: SHOWS_MERCY
-World flag             raider_checkpoint_ambush_disabled = true
+remnant_worker_events_processed_total
+remnant_worker_consequence_engine_total    ← C++ engine calls
+remnant_worker_fallback_total              ← TypeScript fallback triggers
+remnant_worker_processing_duration_seconds
 ```
 
-Every NPC remembers. Every flag persists. The world never resets.
+These answer: Is the pipeline processing events? Is C++ being used? How often does fallback trigger? How long does consequence processing take?
+
+Grafana dashboard provisioning is the next milestone.
 
 ---
 
@@ -91,75 +131,100 @@ Every NPC remembers. Every flag persists. The world never resets.
 
 | Layer | Technology |
 |---|---|
-| Frontend | React · TypeScript · Vite · Recharts · SVG |
+| Frontend | React · TypeScript · Vite · SVG world map |
 | API | Node.js · TypeScript · Fastify · Zod |
 | Event Streaming | Apache Kafka · KafkaJS |
-| Consequence Worker | TypeScript async processor |
+| Consequence Engine | **C++** (JSON IPC via child_process) |
+| Engine Fallback | TypeScript consequence logic |
+| Worker | TypeScript async event processor |
 | Database | PostgreSQL · TimescaleDB hypertable |
 | Cache / PubSub | Redis |
 | Live Updates | WebSockets + Redis Pub/Sub |
+| Observability | Prometheus-compatible metrics (prom-client) |
 | Infrastructure | Docker Compose · npm workspaces |
-
----
-
-## ✅ What's Built
-
-**Backend engine**
-- Fastify API with Zod-validated shared event schemas
-- Kafka producer publishing `player.action.created` events
-- Async consequence worker consuming Kafka events
-- Faction reputation propagation through relationship graph
-- NPC memory system with behavior state machine
-- World-state flag system with persistent consequences
-- Consequence preview API — see impacts before committing
-
-**Live infrastructure**
-- Redis active-state cache refreshed after every event
-- Redis pub/sub channel per player (`channel:player_001:updates`)
-- WebSocket endpoint subscribing to Redis channel and forwarding live
-
-**Playable frontend**
-- React + TypeScript dashboard at `localhost:5173`
-- Branching text-choice scenario (Dusthaven Clinic)
-- SVG faction world map with territory markers and event flags
-- NPC behavior panel, world-state panel, choice timeline
-- Consequence preview shown before player commits a choice
-- Live event feed updating without page refresh
 
 ---
 
 ## 🏗️ Key Technical Decisions
 
+**Why C++ for consequence calculation?**
+Game consequence logic — reputation deltas, NPC memory scoring, world flag evaluation — is computation, not I/O. C++ handles this faster than TypeScript and separates simulation logic from service orchestration. This mirrors real game backends where engines are written in C++ and wrapped by higher-level service layers.
+
+**Why TypeScript fallback?**
+C++ processes can crash, timeout, or return malformed output. A fallback that silently catches these failures and continues processing means the pipeline is fault-tolerant at the simulation layer. Prometheus tracks fallback frequency — if it spikes, something is wrong with the C++ build.
+
 **Why Kafka instead of direct DB writes?**
-Decouples ingestion speed from consequence processing time. The API accepts a choice instantly and returns — the worker handles reputation propagation, memory creation, and flag updates asynchronously. No blocking, no partial writes visible to the player.
+Decouples ingestion from consequence processing. The API accepts an action and returns immediately — the worker handles reputation propagation, NPC memory, Redis refresh, and WebSocket notification asynchronously. No blocking on the request path.
+
+**Why Redis pub/sub for WebSocket delivery?**
+After the worker commits state, it publishes to `channel:player_001:updates`. The API WebSocket handler subscribes and forwards immediately — no polling loop, no timed refresh. The dashboard updates the moment the worker finishes.
 
 **Why TimescaleDB for choice events?**
-Choice history is time-series data. Every query is time-ordered ("what did this player do in the last session?"). TimescaleDB hypertables partition automatically on `occurred_at` — efficient historical queries without changing the PostgreSQL interface.
+Choice history is time-series data. TimescaleDB hypertables partition on `occurred_at` automatically, keeping historical queries fast as event volume grows.
 
-**Why Redis pub/sub instead of polling?**
-The worker publishes to `channel:player_001:updates` after committing state. The WebSocket handler subscribes to that channel and forwards immediately. No polling loop, no latency from timed refreshes — the frontend updates the moment the worker finishes.
-
-**Why a consequence preview API?**
-Detroit's genius is showing you the ripple before you commit. `POST /actions/preview` calculates consequence deltas without mutating state — the frontend shows predicted reputation changes before the player confirms. Same logic, zero side effects.
-
-**Why separate the worker from the API?**
-Consequence calculation involves multiple sequential writes — reputation updates, NPC memory, world flags, Redis refresh, pub/sub publish. Doing this in the API request handler would block the response and risk partial-write failures visible to the player. The worker handles everything transactionally after the Kafka event is confirmed durable.
+**Why Prometheus on both API and worker?**
+A metric that only covers the API doesn't tell you if Kafka events are being processed. Instrumenting both services independently means you can distinguish between "API is down" and "worker is down" — two very different failure modes.
 
 ---
 
-## 🎮 Playable Scenario — Dusthaven
+## ✅ What's Built
 
-The dashboard ships with a branching scenario:
+**Backend pipeline**
+- Fastify API with Zod-validated shared TypeScript event schemas
+- Kafka producer publishing `player.action.created` events
+- TypeScript async worker consuming Kafka events
+- **C++ consequence engine** called via child_process JSON IPC
+- TypeScript fallback if C++ fails or times out
+- Faction reputation propagation through relationship graph
+- NPC memory system with behavior state machine
+- World-state flag system
+- Consequence preview API — see impacts before committing
+- Prometheus metrics on API and worker
+
+**Live infrastructure**
+- Redis active-state cache refreshed after every event
+- Redis pub/sub channel per player
+- WebSocket endpoint subscribing to Redis and forwarding live
+
+**Frontend**
+- React + TypeScript playable dashboard
+- Branching text-choice scenario (Dusthaven Clinic)
+- SVG faction world map with territory markers and world flags
+- NPC behavior panel, world-state panel, choice timeline
+- Consequence preview before committing
+- Live event feed without page refresh
+
+---
+
+## 🎮 Playable Scenario
 
 ```
 The Clinic Is Running Out of Medicine
-    ├── Give medicine to Elias → The Clinic Survives the Night
-    ├── Rob Mara's supplies   → The Trade Post Locks Down
-    ├── Spare Knox            → Knox Leaves a Warning Mark
-    └── Attack the checkpoint → The Checkpoint Burns
+    ├── Give medicine to Elias  → The Clinic Survives the Night
+    ├── Rob Mara's supplies     → The Trade Post Locks Down
+    ├── Spare Knox              → Knox Leaves a Warning Mark
+    └── Attack the checkpoint   → The Checkpoint Burns
 ```
 
-Each branch commits a real backend action — not a frontend state toggle. The world remembers even if you reset the scenario view.
+Each branch submits a real backend action. The world state persists across resets.
+
+---
+
+## 🔌 API Reference
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/health` | API, DB, Redis, Kafka, WebSocket status |
+| `POST` | `/actions` | Submit player choice → Kafka event |
+| `POST` | `/actions/preview` | Preview consequences without committing |
+| `GET` | `/players/:id/state` | Full player state |
+| `GET` | `/players/:id/reputation` | Faction reputation scores |
+| `GET` | `/players/:id/timeline` | Choice history |
+| `GET` | `/players/:id/world-state` | World-state flags |
+| `GET` | `/npcs/:id/behavior?playerId=` | NPC behavior from memory |
+| `GET` | `/world/state` | Global world-state flags |
+| `GET` | `/metrics` | Prometheus metrics |
+| `WS` | `/ws/players/:id` | Live consequence updates |
 
 ---
 
@@ -168,66 +233,61 @@ Each branch commits a real backend action — not a frontend state toggle. The w
 ```
 remnant/
   apps/
-    api/          Fastify API · Kafka producer · WebSockets · read APIs
-    worker/       Kafka consumer · consequence processor · Redis refresh
-    dashboard/    React · TypeScript · SVG map · playable scenario
+    api/           Fastify API · Kafka producer · WebSockets · Prometheus metrics
+    worker/        Kafka consumer · C++ engine caller · fallback · Redis refresh
+    dashboard/     React · TypeScript · SVG map · branching scenario
   packages/
-    shared/       Zod event schemas shared across API and worker
+    shared/        Zod event schemas shared between API and worker
+  engines/
+    consequence-cpp/
+      src/main.cpp              C++ consequence engine
+      build/remnant_consequence_engine
   infra/
-    db/
-      init.sql    PostgreSQL / TimescaleDB schema and seed data
+    db/init.sql    PostgreSQL / TimescaleDB schema and seed data
   docker-compose.yml
 ```
 
 ---
 
-## 🔌 API Reference
+## 🚀 Quick Start
 
-**Submit a choice**
 ```bash
+# Install and build
+npm install && npm run build
+
+# Start full stack
+docker compose up --build
+```
+
+Dashboard: `http://localhost:5173`
+API: `http://localhost:3000`
+Metrics: `http://localhost:3000/metrics`
+
+```bash
+# Health check
+curl http://localhost:3000/health
+
+# Submit a choice
 curl -X POST http://localhost:3000/actions \
   -H "Content-Type: application/json" \
   -d '{"playerId":"player_001","actionType":"DONATE_RESOURCE","targetFaction":"Survivors","npcId":"elias","metadata":{"resource":"medicine","amount":2}}'
-```
 
-**Preview consequences before committing**
-```bash
-curl -X POST http://localhost:3000/actions/preview \
-  -H "Content-Type: application/json" \
-  -d '{"playerId":"player_001","actionType":"ROB_NPC","targetFaction":"Traders","npcId":"mara","metadata":{"resource":"water","amount":1}}'
-```
-
-**Read player state**
-```bash
-curl http://localhost:3000/players/player_001/state      # full state
-curl http://localhost:3000/players/player_001/reputation # faction scores
-curl http://localhost:3000/players/player_001/timeline   # choice history
-```
-
-**NPC behavior**
-```bash
+# Check NPC behavior changed
 curl "http://localhost:3000/npcs/elias/behavior?playerId=player_001"
-curl "http://localhost:3000/npcs/mara/behavior?playerId=player_001"
-curl "http://localhost:3000/npcs/knox/behavior?playerId=player_001"
-```
 
-**Live WebSocket**
-```bash
-npx wscat -c ws://localhost:3000/ws/players/player_001
+# Check Prometheus metrics
+curl http://localhost:3000/metrics | grep remnant
 ```
-
-Supported actions: `HELP_FACTION` · `ROB_NPC` · `SPARE_ENEMY` · `ATTACK_FACTION` · `DONATE_RESOURCE`
 
 ---
 
 ## 🗺️ Roadmap
 
-- [ ] C++ consequence simulation engine replacing TypeScript consequence logic
-- [ ] Multi-player shared world state — all players affect the same world
-- [ ] Grafana observability dashboard — reputation trends, event volume
-- [ ] Scheduled world events — faction conflicts firing independently of players
-- [ ] GitHub Actions CI — build, test, consequence worker validation
-- [ ] Additional factions, NPCs, and branching scenario chapters
+- [ ] Prometheus + Grafana dashboard provisioning
+- [ ] Multi-player shared world state
+- [ ] Scheduled world events independent of player actions
+- [ ] GitHub Actions CI — TypeScript build, C++ build, API smoke tests
+- [ ] Additional factions, NPCs, and scenario branches
 - [ ] Demo GIF / video walkthrough
 
 ---
@@ -238,4 +298,4 @@ MIT
 
 ---
 
-> REMNANT demonstrates that game-state simulation is a distributed systems problem — event streaming, async consequence processing, time-series persistence, active-state caching, and real-time WebSocket delivery — not just a frontend concern. Built with Kafka, TypeScript, PostgreSQL/TimescaleDB, Redis, and React.
+> REMNANT demonstrates that game-state simulation is a distributed systems problem. Kafka event streaming, TypeScript service orchestration, C++ consequence simulation with fallback resilience, PostgreSQL/TimescaleDB persistence, Redis caching and pub/sub, WebSocket live delivery, and Prometheus observability — applied to a consequence-driven post-apocalyptic world.
