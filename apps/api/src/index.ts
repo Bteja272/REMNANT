@@ -559,6 +559,176 @@ app.get("/players/:playerId/world-events", async (request, reply) => {
   });
 });
 
+app.get("/players", async (_request, reply) => {
+  const result = await db.query(
+    `
+    SELECT
+      id,
+      display_name,
+      created_at
+    FROM players
+    ORDER BY created_at ASC
+    `
+  );
+
+  return reply.status(200).send({
+    players: result.rows
+  });
+});
+
+app.post("/players", async (request, reply) => {
+  const body = request.body as {
+    id?: string;
+    displayName?: string;
+  };
+
+  const playerId =
+    body.id?.trim() || `player_${crypto.randomUUID().slice(0, 8)}`;
+
+  const displayName = body.displayName?.trim() || playerId;
+
+  const client = await db.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const playerResult = await client.query(
+      `
+      INSERT INTO players (id, display_name)
+      VALUES ($1, $2)
+      ON CONFLICT (id)
+      DO UPDATE SET display_name = EXCLUDED.display_name
+      RETURNING id, display_name, created_at
+      `,
+      [playerId, displayName]
+    );
+
+    await client.query(
+      `
+      INSERT INTO player_faction_reputation (
+        player_id,
+        faction_id,
+        reputation_score
+      )
+      SELECT
+        $1,
+        id,
+        0
+      FROM factions
+      ON CONFLICT (player_id, faction_id)
+      DO NOTHING
+      `,
+      [playerId]
+    );
+
+    await client.query("COMMIT");
+
+    return reply.status(201).send({
+      player: playerResult.rows[0]
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/world/shared-state", async (_request, reply) => {
+  const playersResult = await db.query(
+    `
+    SELECT
+      id,
+      display_name,
+      created_at
+    FROM players
+    ORDER BY created_at ASC
+    `
+  );
+
+  const actionCountsResult = await db.query(
+    `
+    SELECT
+      action_type,
+      COUNT(*)::INT AS count
+    FROM choice_events
+    GROUP BY action_type
+    ORDER BY count DESC, action_type ASC
+    `
+  );
+
+  const factionActivityResult = await db.query(
+    `
+    SELECT
+      LOWER(target_faction) AS faction,
+      COUNT(*)::INT AS count
+    FROM choice_events
+    WHERE target_faction IS NOT NULL
+    GROUP BY LOWER(target_faction)
+    ORDER BY count DESC
+    `
+  );
+
+  const latestEventsResult = await db.query(
+    `
+    SELECT
+      event_id,
+      occurred_at,
+      player_id,
+      action_type,
+      target_faction,
+      npc_id,
+      metadata
+    FROM choice_events
+    ORDER BY occurred_at DESC
+    LIMIT 15
+    `
+  );
+
+  const worldFlagsResult = await db.query(
+    `
+    SELECT
+      player_id,
+      flag_key,
+      flag_value,
+      description,
+      source_event_id,
+      updated_at
+    FROM world_state_flags
+    ORDER BY updated_at DESC
+    LIMIT 30
+    `
+  );
+
+  const systemEventsResult = await db.query(
+    `
+    SELECT
+      event_id,
+      occurred_at,
+      player_id,
+      world_event_type,
+      severity,
+      description,
+      affected_faction,
+      affected_npc_id,
+      flag_key
+    FROM system_world_events
+    ORDER BY occurred_at DESC
+    LIMIT 15
+    `
+  );
+
+  return reply.status(200).send({
+    players: playersResult.rows,
+    actionCounts: actionCountsResult.rows,
+    factionActivity: factionActivityResult.rows,
+    latestEvents: latestEventsResult.rows,
+    worldFlags: worldFlagsResult.rows,
+    systemEvents: systemEventsResult.rows
+  });
+});
+
+
 app.get("/players/:playerId/state", async (request, reply) => {
   const { playerId } = request.params as { playerId: string };
 
