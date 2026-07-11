@@ -12,6 +12,11 @@
     "build": "npm run build --workspaces",
     "dev:api": "npm run dev -w apps/api",
     "dev:worker": "npm run dev -w apps/worker",
-    "dev:dashboard": "npm run dev -w apps/dashboard"
+    "dev:dashboard": "npm run dev -w apps/dashboard",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.10"
   }
 }
