@@ -44,6 +44,20 @@ type WorldStateFlag = {
   updated_at: string;
 };
 
+type WorldEvent = {
+  event_id: string;
+  event_type: string;
+  occurred_at: string;
+  world_event_type: string;
+  source: string;
+  severity: "LOW" | "MEDIUM" | "HIGH";
+  description: string;
+  affected_faction: string | null;
+  affected_npc_id: string | null;
+  flag_key: string | null;
+  metadata?: Record<string, unknown>;
+};
+
 type PlayerStateResponse = {
   player: {
     id: string;
@@ -53,6 +67,7 @@ type PlayerStateResponse = {
   reputation: ReputationRow[];
   recentTimeline: TimelineEvent[];
   worldState: WorldStateFlag[];
+  worldEvents: WorldEvent[];
 };
 
 type NpcBehaviorResponse = {
@@ -80,8 +95,14 @@ type LiveMessage = {
   playerId?: string;
   eventId?: string;
   actionType?: string;
+  worldEventType?: string;
+  severity?: string;
+  description?: string;
   targetFaction?: string | null;
   npcId?: string | null;
+  affectedFaction?: string | null;
+  affectedNpcId?: string | null;
+  flagKey?: string | null;
   reputationUpdated?: boolean;
   npcMemoryUpdated?: boolean;
   worldStateUpdated?: boolean;
@@ -100,6 +121,10 @@ async function fetchJson<T>(url: string): Promise<T> {
 
 function formatDate(value: string): string {
   return new Date(value).toLocaleString();
+}
+
+function formatLabel(value: string): string {
+  return value.replace("_", " ");
 }
 
 function App() {
@@ -132,7 +157,10 @@ function App() {
       `${API_BASE_URL}/players/${PLAYER_ID}/state`
     );
 
-    setPlayerState(state);
+    setPlayerState({
+      ...state,
+      worldEvents: state.worldEvents ?? []
+    });
   }
 
   async function loadNpcBehavior(npcId: string) {
@@ -217,7 +245,10 @@ function App() {
 
       setLiveMessages((current) => [message, ...current].slice(0, 10));
 
-      if (message.type === "PLAYER_STATE_UPDATED") {
+      if (
+        message.type === "PLAYER_STATE_UPDATED" ||
+        message.type === "WORLD_EVENT_TRIGGERED"
+      ) {
         await refreshView(selectedNpc);
       }
     };
@@ -243,7 +274,8 @@ function App() {
           <h1>Survival Choice Engine</h1>
           <p>
             Play through a branching survival scenario where choices update
-            faction trust, NPC memory, world-state flags, and live map feedback.
+            faction trust, NPC memory, world-state flags, scheduled world
+            events, and live map feedback.
           </p>
         </div>
 
@@ -339,6 +371,47 @@ function App() {
           </div>
         </section>
 
+        <section className="panel world-events-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">System Events</p>
+              <h2>Scheduled World Events</h2>
+            </div>
+          </div>
+
+          {playerState?.worldEvents.length ? (
+            <div className="world-event-list">
+              {playerState.worldEvents.map((event) => (
+                <article
+                  key={event.event_id}
+                  className={`world-event-card severity-${event.severity.toLowerCase()}`}
+                >
+                  <div className="world-event-topline">
+                    <span>{formatLabel(event.world_event_type)}</span>
+                    <strong>{event.severity}</strong>
+                  </div>
+
+                  <p>{event.description}</p>
+
+                  <div className="world-event-meta">
+                    <span>{formatDate(event.occurred_at)}</span>
+
+                    {event.affected_faction && (
+                      <span>Faction: {event.affected_faction}</span>
+                    )}
+
+                    {event.affected_npc_id && (
+                      <span>NPC: {event.affected_npc_id}</span>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="empty">No scheduled world events have triggered yet.</p>
+          )}
+        </section>
+
         <section className="panel timeline-panel">
           <h2>Recent Timeline</h2>
 
@@ -396,7 +469,11 @@ function App() {
                         className="list-item"
                       >
                         <strong>{message.type}</strong>
-                        <span>{message.actionType ?? "System message"}</span>
+                        <span>
+                          {message.actionType ??
+                            message.worldEventType ??
+                            "System message"}
+                        </span>
                         <small>
                           {message.occurredAt
                             ? formatDate(message.occurredAt)

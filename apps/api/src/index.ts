@@ -526,6 +526,39 @@ app.get("/players/:playerId/timeline", async (request, reply) => {
   });
 });
 
+app.get("/players/:playerId/world-events", async (request, reply) => {
+  const { playerId } = request.params as { playerId: string };
+
+  const result = await db.query(
+    `
+    SELECT
+      event_id,
+      event_type,
+      occurred_at,
+      player_id,
+      world_event_type,
+      source,
+      severity,
+      description,
+      affected_faction,
+      affected_npc_id,
+      flag_key,
+      metadata,
+      created_at
+    FROM system_world_events
+    WHERE player_id = $1
+    ORDER BY occurred_at DESC
+    LIMIT 25
+    `,
+    [playerId]
+  );
+
+  return reply.status(200).send({
+    playerId,
+    worldEvents: result.rows
+  });
+});
+
 app.get("/players/:playerId/state", async (request, reply) => {
   const { playerId } = request.params as { playerId: string };
 
@@ -593,11 +626,34 @@ app.get("/players/:playerId/state", async (request, reply) => {
     [playerId]
   );
 
+  const worldEventsResult = await db.query(
+    `
+    SELECT
+      event_id,
+      event_type,
+      occurred_at,
+      world_event_type,
+      source,
+      severity,
+      description,
+      affected_faction,
+      affected_npc_id,
+      flag_key,
+      metadata
+    FROM system_world_events
+    WHERE player_id = $1
+    ORDER BY occurred_at DESC
+    LIMIT 10
+    `,
+    [playerId]
+  );
+
   return reply.status(200).send({
     player: playerResult.rows[0],
     reputation: reputationResult.rows,
     recentTimeline: timelineResult.rows,
-    worldState: worldStateResult.rows
+    worldState: worldStateResult.rows,
+    worldEvents: worldEventsResult.rows
   });
 });
 
