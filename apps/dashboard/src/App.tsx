@@ -16,8 +16,13 @@ import {
 } from "recharts";
 
 const API_BASE_URL = "http://localhost:3000";
-const WS_URL = "ws://localhost:3000/ws/players/player_001";
-const PLAYER_ID = "player_001";
+const DEFAULT_PLAYER_ID = "player_001";
+
+type Player = {
+  id: string;
+  display_name: string;
+  created_at: string;
+};
 
 type ReputationRow = {
   faction_id: string;
@@ -37,6 +42,7 @@ type TimelineEvent = {
 };
 
 type WorldStateFlag = {
+  player_id?: string;
   flag_key: string;
   flag_value: boolean;
   description: string;
@@ -46,10 +52,11 @@ type WorldStateFlag = {
 
 type WorldEvent = {
   event_id: string;
-  event_type: string;
+  event_type?: string;
   occurred_at: string;
+  player_id?: string;
   world_event_type: string;
-  source: string;
+  source?: string;
   severity: "LOW" | "MEDIUM" | "HIGH";
   description: string;
   affected_faction: string | null;
@@ -59,15 +66,30 @@ type WorldEvent = {
 };
 
 type PlayerStateResponse = {
-  player: {
-    id: string;
-    display_name: string;
-    created_at: string;
-  };
+  player: Player;
   reputation: ReputationRow[];
   recentTimeline: TimelineEvent[];
   worldState: WorldStateFlag[];
   worldEvents: WorldEvent[];
+};
+
+type PlayersResponse = {
+  players: Player[];
+};
+
+type SharedWorldStateResponse = {
+  players: Player[];
+  actionCounts: Array<{
+    action_type: string;
+    count: number;
+  }>;
+  factionActivity: Array<{
+    faction: string;
+    count: number;
+  }>;
+  latestEvents: TimelineEvent[];
+  worldFlags: WorldStateFlag[];
+  systemEvents: WorldEvent[];
 };
 
 type NpcBehaviorResponse = {
@@ -124,14 +146,22 @@ function formatDate(value: string): string {
 }
 
 function formatLabel(value: string): string {
-  return value.replace("_", " ");
+  return value.replace(/_/g, " ");
 }
 
 function App() {
   const [currentSceneId, setCurrentSceneId] = useState(START_SCENE_ID);
+  const [selectedPlayerId, setSelectedPlayerId] = useState(DEFAULT_PLAYER_ID);
+  const [players, setPlayers] = useState<Player[]>([]);
+  const [newPlayerId, setNewPlayerId] = useState("player_002");
+  const [newPlayerName, setNewPlayerName] = useState("Second Survivor");
+
   const [playerState, setPlayerState] = useState<PlayerStateResponse | null>(
     null
   );
+  const [sharedWorldState, setSharedWorldState] =
+    useState<SharedWorldStateResponse | null>(null);
+
   const [selectedNpc, setSelectedNpc] = useState("elias");
   const [npcBehavior, setNpcBehavior] = useState<NpcBehaviorResponse | null>(
     null
@@ -152,9 +182,22 @@ function App() {
     );
   }, [playerState]);
 
-  async function loadPlayerState() {
+  async function loadPlayers() {
+    const response = await fetchJson<PlayersResponse>(`${API_BASE_URL}/players`);
+    setPlayers(response.players);
+  }
+
+  async function loadSharedWorldState() {
+    const state = await fetchJson<SharedWorldStateResponse>(
+      `${API_BASE_URL}/world/shared-state`
+    );
+
+    setSharedWorldState(state);
+  }
+
+  async function loadPlayerState(playerId = selectedPlayerId) {
     const state = await fetchJson<PlayerStateResponse>(
-      `${API_BASE_URL}/players/${PLAYER_ID}/state`
+      `${API_BASE_URL}/players/${playerId}/state`
     );
 
     setPlayerState({
@@ -163,17 +206,54 @@ function App() {
     });
   }
 
-  async function loadNpcBehavior(npcId: string) {
+  async function loadNpcBehavior(npcId: string, playerId = selectedPlayerId) {
     const behavior = await fetchJson<NpcBehaviorResponse>(
-      `${API_BASE_URL}/npcs/${npcId}/behavior?playerId=${PLAYER_ID}`
+      `${API_BASE_URL}/npcs/${npcId}/behavior?playerId=${playerId}`
     );
 
     setNpcBehavior(behavior);
   }
 
-  async function refreshView(npcId = selectedNpc) {
-    await loadPlayerState();
-    await loadNpcBehavior(npcId);
+  async function refreshView(
+    npcId = selectedNpc,
+    playerId = selectedPlayerId
+  ) {
+    await Promise.all([
+      loadPlayers(),
+      loadPlayerState(playerId),
+      loadNpcBehavior(npcId, playerId),
+      loadSharedWorldState()
+    ]);
+  }
+
+  async function createPlayer() {
+    setError("");
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/players`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          id: newPlayerId,
+          displayName: newPlayerName
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Create player failed: ${response.status}`);
+      }
+
+      const data = (await response.json()) as { player: Player };
+
+      setSelectedPlayerId(data.player.id);
+      setCurrentSceneId(START_SCENE_ID);
+      setSelectedNpc("elias");
+      await refreshView("elias", data.player.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create player");
+    }
   }
 
   async function handleScenarioChoice(choice: ScenarioChoice) {
@@ -188,7 +268,7 @@ function App() {
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
-            playerId: PLAYER_ID,
+            playerId: selectedPlayerId,
             actionType: choice.action.actionType,
             targetFaction: choice.action.targetFaction,
             npcId: choice.action.npcId,
@@ -201,9 +281,9 @@ function App() {
         }
 
         setSelectedNpc(choice.action.npcId);
-        await refreshView(choice.action.npcId);
+        await refreshView(choice.action.npcId, selectedPlayerId);
       } else {
-        await refreshView();
+        await refreshView(selectedNpc, selectedPlayerId);
       }
 
       setCurrentSceneId(choice.nextSceneId);
@@ -220,24 +300,26 @@ function App() {
   }
 
   useEffect(() => {
-    refreshView().catch((err) => {
+    refreshView("elias", selectedPlayerId).catch((err) => {
       setError(err instanceof Error ? err.message : "Failed to load state");
     });
-  }, []);
+  }, [selectedPlayerId]);
 
   useEffect(() => {
-    loadNpcBehavior(selectedNpc).catch((err) => {
+    loadNpcBehavior(selectedNpc, selectedPlayerId).catch((err) => {
       setError(
         err instanceof Error ? err.message : "Failed to load NPC behavior"
       );
     });
-  }, [selectedNpc]);
+  }, [selectedNpc, selectedPlayerId]);
 
   useEffect(() => {
-    const socket = new WebSocket(WS_URL);
+    const socket = new WebSocket(
+      `ws://localhost:3000/ws/players/${selectedPlayerId}`
+    );
 
     socket.onopen = () => {
-      setConnectionStatus("Connected");
+      setConnectionStatus(`Connected: ${selectedPlayerId}`);
     };
 
     socket.onmessage = async (event) => {
@@ -249,7 +331,7 @@ function App() {
         message.type === "PLAYER_STATE_UPDATED" ||
         message.type === "WORLD_EVENT_TRIGGERED"
       ) {
-        await refreshView(selectedNpc);
+        await refreshView(selectedNpc, selectedPlayerId);
       }
     };
 
@@ -264,7 +346,7 @@ function App() {
     return () => {
       socket.close();
     };
-  }, [selectedNpc]);
+  }, [selectedPlayerId, selectedNpc]);
 
   return (
     <main className="app">
@@ -274,8 +356,8 @@ function App() {
           <h1>Survival Choice Engine</h1>
           <p>
             Play through a branching survival scenario where choices update
-            faction trust, NPC memory, world-state flags, scheduled world
-            events, and live map feedback.
+            faction trust, NPC memory, world-state flags, scheduled events,
+            multiplayer state, and live map feedback.
           </p>
         </div>
 
@@ -287,10 +369,68 @@ function App() {
 
       {error && <div className="error">{error}</div>}
 
+      <section className="panel player-switcher-panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Multiplayer</p>
+            <h2>Player Switching</h2>
+          </div>
+        </div>
+
+        <div className="player-switcher-grid">
+          <label>
+            Active Player
+            <select
+              value={selectedPlayerId}
+              onChange={(event) => {
+                setSelectedPlayerId(event.target.value);
+                setCurrentSceneId(START_SCENE_ID);
+                setSelectedNpc("elias");
+                setLiveMessages([]);
+              }}
+            >
+              {players.length ? (
+                players.map((player) => (
+                  <option key={player.id} value={player.id}>
+                    {player.display_name} ({player.id})
+                  </option>
+                ))
+              ) : (
+                <option value={DEFAULT_PLAYER_ID}>player_001</option>
+              )}
+            </select>
+          </label>
+
+          <label>
+            New Player ID
+            <input
+              value={newPlayerId}
+              onChange={(event) => setNewPlayerId(event.target.value)}
+              placeholder="player_002"
+            />
+          </label>
+
+          <label>
+            Display Name
+            <input
+              value={newPlayerName}
+              onChange={(event) => setNewPlayerName(event.target.value)}
+              placeholder="Second Survivor"
+            />
+          </label>
+
+          <button className="create-player-button" onClick={createPlayer}>
+            Create / Switch Player
+          </button>
+        </div>
+      </section>
+
       <section className="play-layout">
         <section className="panel scenario-panel">
           <div className="scenario-topline">
-            <p className="eyebrow">{currentScene.chapter}</p>
+            <p className="eyebrow">
+              {currentScene.chapter} · {selectedPlayerId}
+            </p>
 
             <button className="reset-button" onClick={resetScenario}>
               Reset scene
@@ -421,7 +561,8 @@ function App() {
                 <div key={event.event_id} className="list-item">
                   <strong>{event.action_type}</strong>
                   <span>
-                    Target: {event.target_faction ?? "N/A"} · NPC:{" "}
+                    Player: {selectedPlayerId} · Target:{" "}
+                    {event.target_faction ?? "N/A"} · NPC:{" "}
                     {event.npc_id ?? "N/A"}
                   </span>
                   <small>{formatDate(event.occurred_at)}</small>
@@ -430,6 +571,84 @@ function App() {
             ) : (
               <p className="empty">No timeline events yet.</p>
             )}
+          </div>
+        </section>
+
+        <section className="panel shared-world-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Shared State</p>
+              <h2>Global World Activity</h2>
+            </div>
+          </div>
+
+          <div className="shared-world-grid">
+            <div>
+              <h3>Players</h3>
+              <div className="list">
+                {sharedWorldState?.players.length ? (
+                  sharedWorldState.players.map((player) => (
+                    <div key={player.id} className="list-item">
+                      <strong>{player.display_name}</strong>
+                      <span>{player.id}</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="empty">No players loaded.</p>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <h3>Action Counts</h3>
+              <div className="list">
+                {sharedWorldState?.actionCounts.length ? (
+                  sharedWorldState.actionCounts.map((item) => (
+                    <div key={item.action_type} className="list-item">
+                      <strong>{item.action_type}</strong>
+                      <span>{item.count} actions</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="empty">No shared action counts yet.</p>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <h3>Faction Activity</h3>
+              <div className="list">
+                {sharedWorldState?.factionActivity.length ? (
+                  sharedWorldState.factionActivity.map((item) => (
+                    <div key={item.faction} className="list-item">
+                      <strong>{item.faction}</strong>
+                      <span>{item.count} interactions</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="empty">No faction activity yet.</p>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <h3>Latest Shared Events</h3>
+              <div className="list">
+                {sharedWorldState?.latestEvents.length ? (
+                  sharedWorldState.latestEvents.slice(0, 6).map((event) => (
+                    <div key={event.event_id} className="list-item">
+                      <strong>{event.action_type}</strong>
+                      <span>
+                        {event.player_id} → {event.target_faction ?? "N/A"}
+                      </span>
+                      <small>{formatDate(event.occurred_at)}</small>
+                    </div>
+                  ))
+                ) : (
+                  <p className="empty">No shared events yet.</p>
+                )}
+              </div>
+            </div>
           </div>
         </section>
 
