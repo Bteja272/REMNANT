@@ -4,6 +4,7 @@ import Redis from "ioredis";
 import { Kafka } from "kafkajs";
 import { Pool } from "pg";
 import client from "prom-client";
+import { runScheduledWorldEventCheck } from "./scheduledWorldEvents";
 import {
   PLAYER_ACTION_CREATED_TOPIC,
   PlayerActionCreatedEvent,
@@ -23,6 +24,13 @@ const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 const CONSEQUENCE_ENGINE_PATH =
   process.env.CONSEQUENCE_ENGINE_PATH ??
   "engines/consequence-cpp/build/remnant_consequence_engine";
+
+const SCHEDULED_WORLD_EVENTS_ENABLED =
+  process.env.SCHEDULED_WORLD_EVENTS_ENABLED !== "false";
+
+const SCHEDULED_WORLD_EVENTS_INTERVAL_MS = Number(
+  process.env.SCHEDULED_WORLD_EVENTS_INTERVAL_MS ?? 60000
+);
 
 const db = new Pool({
   connectionString: DATABASE_URL
@@ -750,6 +758,39 @@ function startWorkerMetricsServer() {
   return server;
 }
 
+function startScheduledWorldEventLoop() {
+  if (!SCHEDULED_WORLD_EVENTS_ENABLED) {
+    console.log("[worker] Scheduled world events disabled");
+    return;
+  }
+
+  console.log(
+    `[worker] Scheduled world event loop enabled. intervalMs=${SCHEDULED_WORLD_EVENTS_INTERVAL_MS}`
+  );
+
+  const runCheck = async () => {
+    try {
+      const results = await runScheduledWorldEventCheck(db, redis);
+      const triggered = results.filter((result) => result.triggered);
+
+      if (triggered.length > 0) {
+        console.log(
+          `[worker] Scheduled world events triggered: ${triggered.length}`
+        );
+
+        for (const result of triggered) {
+          console.log("[worker] World event triggered", result.event);
+        }
+      }
+    } catch (error) {
+      console.error("[worker] Scheduled world event check failed", error);
+    }
+  };
+
+  setTimeout(runCheck, 5000);
+  setInterval(runCheck, SCHEDULED_WORLD_EVENTS_INTERVAL_MS);
+}
+
 async function startWorker() {
   await db.query("SELECT 1");
   console.log("[worker] Connected to PostgreSQL");
@@ -758,6 +799,7 @@ async function startWorker() {
   console.log("[worker] Connected to Redis");
 
   startWorkerMetricsServer();
+  startScheduledWorldEventLoop();
 
   const kafka = new Kafka({
     clientId: "remnant-worker",

@@ -93,6 +93,8 @@ services:
       REDIS_URL: redis://remnant-redis:6379
       CONSEQUENCE_ENGINE_PATH: /app/engines/consequence-cpp/build/remnant_consequence_engine
       WORKER_METRICS_PORT: 9101
+      SCHEDULED_WORLD_EVENTS_ENABLED: "true"
+      SCHEDULED_WORLD_EVENTS_INTERVAL_MS: 60000
       # CONSEQUENCE_ENGINE_PATH: /app/engines/consequence-cpp/build/missing_engine
     volumes:
       - .:/app
