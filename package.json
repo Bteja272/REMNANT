@@ -10,6 +10,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces",
+    "build:cpp": "mkdir -p engines/consequence-cpp/build && g++ -std=c++17 -O2 engines/consequence-cpp/src/main.cpp -o engines/consequence-cpp/build/remnant_consequence_engine",
     "dev:api": "npm run dev -w apps/api",
     "dev:worker": "npm run dev -w apps/worker",
     "dev:dashboard": "npm run dev -w apps/dashboard",

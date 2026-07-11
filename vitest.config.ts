@@ -6,7 +6,8 @@ export default defineConfig({
     environment: "node",
     include: [
       "packages/**/*.test.ts",
-      "apps/**/*.test.ts"
+      "apps/**/*.test.ts",
+      "engines/**/*.test.ts"
     ],
     exclude: [
       "node_modules",
