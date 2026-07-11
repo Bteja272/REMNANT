@@ -171,3 +171,30 @@ VALUES
     ('mara', 'Mara', 'traders', 'A cautious Trader who controls access to scarce supplies.'),
     ('knox', 'Knox', 'raiders', 'A Raider scout who remembers mercy and betrayal.')
 ON CONFLICT (id) DO NOTHING;
+
+
+
+CREATE TABLE IF NOT EXISTS system_world_events (
+  event_id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL DEFAULT 'world.event.triggered',
+  occurred_at TIMESTAMPTZ NOT NULL,
+  player_id TEXT REFERENCES players(id) ON DELETE CASCADE,
+  world_event_type TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'scheduler',
+  severity TEXT NOT NULL DEFAULT 'MEDIUM',
+  description TEXT NOT NULL,
+  affected_faction TEXT REFERENCES factions(id) ON DELETE SET NULL,
+  affected_npc_id TEXT REFERENCES npcs(id) ON DELETE SET NULL,
+  flag_key TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_world_events_player_time
+  ON system_world_events (player_id, occurred_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_system_world_events_type_time
+  ON system_world_events (world_event_type, occurred_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_system_world_events_severity_time
+  ON system_world_events (severity, occurred_at DESC);
